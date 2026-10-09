@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "SvenskaSpaced",
+    "slug": "svenska-spaced",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.svenskaspaced.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#005B99"
+      }
+    }
+  }
+}

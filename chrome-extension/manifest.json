@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "SvenskaSpaced — Swedish Vocab & Spaced Repetition",
+  "version": "1.0.0",
+  "description": "Select any Swedish word on a webpage to get its dictionary lemma (en/ett), English translation, native audio, and 1st Google Image, then save to Firebase Firestore for FSRS spaced repetition on Android.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "SvenskaSpaced Deck & Settings"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

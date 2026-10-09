@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#005B99" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>SvenskaSpaced — Android Spaced Repetition</title>
+  <style>
+    :root {
+      --sv-blue: #005B99;
+      --sv-blue-dark: #003e6b;
+      --sv-yellow: #FECC02;
+      --bg: #f1f5f9;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      background: #0f172a;
+      display: flex;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .phone-shell {
+      width: 100%;
+      max-width: 430px;
+      min-height: 100vh;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+    }
+    header {
+      background: linear-gradient(135deg, var(--sv-blue) 0%, var(--sv-blue-dark) 100%);
+      color: #fff;
+      padding: 16px 16px 12px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .brand {
+      font-size: 20px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .due-pill {
+      background: rgba(255, 255, 255, 0.18);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .nav-tabs {
+      display: flex;
+      gap: 6px;
+    }
+    .nav-btn {
+      flex: 1;
+      border: none;
+      background: rgba(255, 255, 255, 0.14);
+      color: rgba(255, 255, 255, 0.9);
+      padding: 8px 6px;
+      border-radius: 9px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .nav-btn.active {
+      background: var(--sv-yellow);
+      color: #0f172a;
+      font-weight: 800;
+    }
+    main {
+      padding: 14px;
+      flex: 1;
+    }
+    .mode-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .mode-chip {
+      flex: 1;
+      border: 1px solid #cbd5e1;
+      background: #e2e8f0;
+      color: #475569;
+      padding: 6px 8px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .mode-chip.active {
+      background: var(--sv-blue);
+      color: #fff;
+      border-color: var(--sv-blue);
+    }
+    .flashcard {
+      background: var(--card);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+      border: 1px solid #e2e8f0;
+    }
+    .card-banner {
+      padding: 10px 16px;
+      color: #fff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .gender-tag {
+      background: rgba(255, 255, 255, 0.24);
+      padding: 3px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      font-weight: 800;
+      font-size: 11px;
+    }
+    .card-body {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .sv-word-big {
+      font-size: 30px;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 12px;
+    }
+    .audio-btn {
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-bottom: 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .audio-btn:hover {
+      background: #e2e8f0;
+    }
+    .context-quote {
+      background: #f8fafc;
+      border-left: 4px solid var(--sv-blue);
+      padding: 12px;
+      border-radius: 0 10px 10px 0;
+      width: 100%;
+      font-style: italic;
+      color: #1e293b;
+      font-size: 14.5px;
+      margin-bottom: 14px;
+    }
+    .card-img {
+      width: 100%;
+      height: 190px;
+      object-fit: cover;
+      border-radius: 12px;
+      margin-bottom: 12px;
+      background: #e2e8f0;
+    }
+    .reveal-btn {
+      width: 100%;
+      background: var(--sv-blue);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 15.5px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .divider {
+      width: 100%;
+      height: 1px;
+      background: #e2e8f0;
+      margin: 14px 0;
+    }
+    .answer-headline {
+      font-size: 23px;
+      font-weight: 800;
+      color: var(--sv-blue);
+      margin-bottom: 6px;
+    }
+    .meta-line {
+      font-size: 12.5px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .rating-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      width: 100%;
+      margin-top: 12px;
+    }
+    .rate-btn {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 4px;
+      color: #fff;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+    .rate-int {
+      font-size: 11px;
+      opacity: 0.9;
+      font-weight: 600;
+    }
+    .rate-lbl {
+      font-size: 13.5px;
+      font-weight: 800;
+    }
+    .deck-item {
+      background: #fff;
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border: 1px solid #e2e8f0;
+    }
+    .deck-thumb {
+      width: 54px;
+      height: 54px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: #e2e8f0;
+      flex-shrink: 0;
+    }
+    .input-box {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-top: 4px;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="phone-shell">
+    <header>
+      <div class="header-top">
+        <div class="brand">🇸🇪 SvenskaSpaced</div>
+        <div class="due-pill" id="due-counter">Due: 3 / 3</div>
+      </div>
+      <div class="nav-tabs">
+        <button class="nav-btn active" data-tab="review" id="tab-btn-review">🎯 Review</button>
+        <button class="nav-btn" data-tab="deck" id="tab-btn-deck">📚 Words</button>
+        <button class="nav-btn" data-tab="settings" id="tab-btn-settings">☁️ Cloud Sync</button>
+      </div>
+    </header>
+
+    <main id="app-main"></main>
+  </div>
+
+  <script>
+    // FSRS-4.5 Weights & Scheduler
+    const W = [0.4072, 1.1829, 3.1262, 15.4722, 7.2102, 0.5316, 1.0651, 0.0234, 1.616, 0.1544, 1.0824, 1.9813, 0.0953, 0.2975, 2.2042, 0.2407, 2.9466, 0.5034, 0.6567];
+    const DECAY = -0.5;
+    const FACTOR = 19 / 81;
+
+    function clampD(d) { return Math.min(Math.max(d, 1.0), 10.0); }
+    function initD(r) { return clampD(W[4] - Math.exp(W[5] * (r - 1)) + 1); }
+    function initS(r) { return Math.max(W[r - 1], 0.1); }
+    function nextD(d, r) {
+      const nd = d - W[6] * (r - 3);
+      return clampD(W[7] * initD(3) + (1 - W[7]) * nd);
+    }
+    function calcR(elapsed, s) {
+      if (s <= 0) return 0;
+      return Math.pow(1 + (FACTOR * elapsed) / s, DECAY);
+    }
+    function nextInterval(s) {
+      return Math.max(1, Math.round((s / FACTOR) * (Math.pow(0.9, 1 / DECAY) - 1)));
+    }
+
+    function scheduleCard(current, rating, now = new Date()) {
+      const st = current || { due: now.toISOString(), stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, reps: 0, lapses: 0, state: 0, lastReview: null };
+      const elapsed = st.lastReview ? Math.max(0, (now - new Date(st.lastReview)) / 86400000) : 0;
+      let s = st.stability, d = st.difficulty, lapses = st.lapses, state = st.state, sched = 0, dueMs = now.getTime(), label = "";
+
+      if (st.state === 0 || st.reps === 0) {
+        d = initD(rating);
+        s = initS(rating);
+        if (rating === 1) { state = 1; sched = 0; dueMs += 600000; label = "10m"; }
+        else if (rating === 2) { state = 1; sched = 1; dueMs += 86400000; label = "1d"; }
+        else if (rating === 3) { state = 2; sched = nextInterval(s); dueMs += sched * 86400000; label = sched + "d"; }
+        else { state = 2; sched = Math.max(4, nextInterval(s)); dueMs += sched * 86400000; label = sched + "d"; }
+      } else {
+        const r = calcR(Math.max(elapsed, 0.5), s);
+        d = nextD(d, rating);
+        if (rating === 1) {
+          lapses++; state = 3;
+          s = Math.max(0.2, W[11] * Math.pow(d, -W[12]) * (Math.pow(s + 1, W[13]) - 1) * Math.exp((1 - r) * W[14]));
+          sched = 0; dueMs += 900000; label = "15m";
+        } else {
+          state = 2;
+          const hp = rating === 2 ? W[15] : 1;
+          const eb = rating === 4 ? W[16] : 1;
+          s = s * (1 + Math.exp(W[8]) * (11 - d) * Math.pow(s, -W[9]) * (Math.exp((1 - r) * W[10]) - 1) * hp * eb);
+          sched = nextInterval(s);
+          if (rating === 2) sched = Math.max(1, Math.round(sched * 0.8));
+          if (rating === 4) sched = Math.max(sched + 1, Math.round(sched * 1.3));
+          dueMs += sched * 86400000; label = sched + "d";
+        }
+      }
+      return {
+        nextState: {
+          due: new Date(dueMs).toISOString(),
+          stability: Number(s.toFixed(2)),
+          difficulty: Number(d.toFixed(2)),
+          elapsedDays: Number(elapsed.toFixed(1)),
+          scheduledDays: sched,
+          reps: (st.reps || 0) + 1,
+          lapses,
+          state,
+          lastReview: now.toISOString()
+        },
+        intervalLabel: label
+      };
+    }
+
+    const STARTER_DECK = [
+      {
+        id: "starter_hund",
+        createdAt: "2026-10-09T18:00:00Z",
+        swedish: {
+          surfaceForm: "hundarna",
+          lemma: "hund",
+          article: "en",
+          partOfSpeech: "noun",
+          inflections: "en hund, hunden, hundar, hundarna",
+          definitionSv: "tam underart till vargen; sällskapsdjur",
+          contextSentence: "Går du ut på promenad med hundarna i parken?"
+        },
+        english: {
+          lemmaTranslation: "dog, hound",
+          contextualTranslation: "the dogs",
+          sentenceTranslation: "Are you going out for a walk with the dogs in the park?"
+        },
+        media: {
+          imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d9/Collage_of_Nine_Dogs.jpg/640px-Collage_of_Nine_Dogs.jpg",
+          audioUrl: "https://upload.wikimedia.org/wikipedia/commons/b/bb/Sv-hund.ogg",
+          audioSource: "Swedish Wiktionary (Native Human)"
+        },
+        fsrs: { due: new Date().toISOString(), stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, reps: 0, lapses: 0, state: 0, lastReview: null }
+      },
+      {
+        id: "starter_fika",
+        createdAt: "2026-10-09T18:05:00Z",
+        swedish: {
+          surfaceForm: "fikade",
+          lemma: "fika",
+          article: "en",
+          partOfSpeech: "verb / noun",
+          inflections: "att fika, fikar, fikade, fikat",
+          definitionSv: "dricka kaffe eller te med fikabröd i sällskap",
+          contextSentence: "Vi fikade på ett mysigt kafé i Gamla stan."
+        },
+        english: {
+          lemmaTranslation: "coffee break / to have coffee & pastry",
+          contextualTranslation: "had coffee",
+          sentenceTranslation: "We had a coffee break at a cozy café in the Old Town."
+        },
+        media: {
+          imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/Fika_med_kanelbulle.jpg/640px-Fika_med_kanelbulle.jpg",
+          audioUrl: "https://upload.wikimedia.org/wikipedia/commons/6/67/Sv-fika.ogg",
+          audioSource: "Swedish Wiktionary (Native Human)"
+        },
+        fsrs: { due: new Date().toISOString(), stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, reps: 0, lapses: 0, state: 0, lastReview: null }
+      },
+      {
+        id: "starter_bibliotek",
+        createdAt: "2026-10-09T18:10:00Z",
+        swedish: {
+          surfaceForm: "biblioteket",
+          lemma: "bibliotek",
+          article: "ett",
+          partOfSpeech: "noun",
+          inflections: "ett bibliotek, biblioteket, bibliotek, biblioteken",
+          definitionSv: "samling av böcker eller byggnad där böcker lånas ut",
+          contextSentence: "Jag lånade tre svenska romaner på biblioteket igår."
+        },
+        english: {
+          lemmaTranslation: "library",
+          contextualTranslation: "the library",
+          sentenceTranslation: "I borrowed three Swedish novels at the library yesterday."
+        },
+        media: {
+          imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Stockholms_stadsbibliotek_interi%C3%B6r_2015.jpg/640px-Stockholms_stadsbibliotek_interi%C3%B6r_2015.jpg",
+          audioUrl: "https://upload.wikimedia.org/wikipedia/commons/5/51/Sv-bibliotek.ogg",
+          audioSource: "Swedish Wiktionary (Native Human)"
+        },
+        fsrs: { due: new Date().toISOString(), stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, reps: 0, lapses: 0, state: 0, lastReview: null }
+      }
+    ];
+
+    let activeTab = "review";
+    let studyMode = "auto";
+    let isRevealed = false;
+    let cards = JSON.parse(localStorage.getItem("svenska_pwa_cards") || "null") || STARTER_DECK;
+    let settings = JSON.parse(localStorage.getItem("svenska_pwa_settings") || "null") || { firebaseProjectId: "", firebaseApiKey: "" };
+    let syncStatusMsg = "";
+
+    function saveLocal() {
+      localStorage.setItem("svenska_pwa_cards", JSON.stringify(cards));
+    }
+
+    function playAudio(card) {
+      const src = card?.media?.audioBase64 || card?.media?.audioUrl;
+      if (src) {
+        const a = new Audio(src);
+        a.play().catch(() => speakFallback(card));
+      } else {
+        speakFallback(card);
+      }
+    }
+
+    function speakFallback(card) {
+      if ("speechSynthesis" in window) {
+        const u = new SpeechSynthesisUtterance(
+          card.swedish.article ? `${card.swedish.article} ${card.swedish.lemma}` : card.swedish.lemma
+        );
+        u.lang = "sv-SE";
+        window.speechSynthesis.speak(u);
+      }
+    }
+
+    function fromFsVal(fv) {
+      if (!fv || typeof fv !== "object") return null;
+      if ("nullValue" in fv) return null;
+      if ("booleanValue" in fv) return Boolean(fv.booleanValue);
+      if ("integerValue" in fv) return Number(fv.integerValue);
+      if ("doubleValue" in fv) return Number(fv.doubleValue);
+      if ("stringValue" in fv) return fv.stringValue;
+      if ("arrayValue" in fv) return (fv.arrayValue.values || []).map(fromFsVal);
+      if ("mapValue" in fv) {
+        const out = {};
+        for (const [k, v] of Object.entries(fv.mapValue.fields || {})) out[k] = fromFsVal(v);
+        return out;
+      }
+      return null;
+    }
+
+    function toFsVal(val) {
+      if (val === null || val === undefined) return { nullValue: null };
+      if (typeof val === "boolean") return { booleanValue: val };
+      if (typeof val === "number") return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+      if (typeof val === "string") return { stringValue: val };
+      if (Array.isArray(val)) return { arrayValue: { values: val.map(toFsVal) } };
+      if (typeof val === "object") {
+        const fields = {};
+        for (const [k, v] of Object.entries(val)) if (v !== undefined) fields[k] = toFsVal(v);
+        return { mapValue: { fields } };
+      }
+      return { stringValue: String(val) };
+    }
+
+    async function syncFromFirestore() {
+      const pid = settings.firebaseProjectId?.trim();
+      if (!pid) return;
+      try {
+        const keyP = settings.firebaseApiKey?.trim() ? `&key=${encodeURIComponent(settings.firebaseApiKey.trim())}` : "";
+        const res = await fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(pid)}/databases/(default)/documents/cards?pageSize=200${keyP}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const cloudCards = (data.documents || []).map((doc) => {
+          const c = {};
+          for (const [k, v] of Object.entries(doc.fields || {})) c[k] = fromFsVal(v);
+          if (!c.id && doc.name) c.id = doc.name.split("/").pop();
+          return c;
+        });
+        if (cloudCards.length > 0) {
+          const map = new Map();
+          for (const c of cards) map.set(c.id, c);
+          for (const c of cloudCards) map.set(c.id, c);
+          cards = Array.from(map.values());
+          saveLocal();
+        }
+        syncStatusMsg = `✓ Synced ${cloudCards.length} cloud card(s) from Firestore!`;
+      } catch (e) {
+        syncStatusMsg = `⚠️ Sync error: ${e.message}`;
+      }
+      render();
+    }
+
+    async function pushCardUpdateToFirestore(card) {
+      const pid = settings.firebaseProjectId?.trim();
+      if (!pid) return;
+      const keyP = settings.firebaseApiKey?.trim() ? `?key=${encodeURIComponent(settings.firebaseApiKey.trim())}` : "";
+      const fields = {};
+      for (const [k, v] of Object.entries(card)) if (v !== undefined) fields[k] = toFsVal(v);
+      await fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(pid)}/databases/(default)/documents/cards/${encodeURIComponent(card.id)}${keyP}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields })
+      }).catch(() => {});
+    }
+
+    function render() {
+      const nowIso = new Date().toISOString();
+      const dueCards = cards
+        .filter((c) => !c.fsrs?.due || c.fsrs.due <= nowIso)
+        .sort((a, b) => (a.fsrs?.due || "").localeCompare(b.fsrs?.due || ""));
+
+      document.getElementById("due-counter").textContent = `Due: ${dueCards.length} / ${cards.length}`;
+      document.getElementById("tab-btn-review").textContent = `🎯 Review (${dueCards.length})`;
+      document.getElementById("tab-btn-deck").textContent = `📚 Words (${cards.length})`;
+
+      document.querySelectorAll(".nav-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.tab === activeTab);
+      });
+
+      const main = document.getElementById("app-main");
+
+      if (activeTab === "review") {
+        const curr = dueCards[0];
+        if (!curr) {
+          main.innerHTML = `
+            <div class="flashcard" style="padding:28px;text-align:center;">
+              <div style="font-size:48px;margin-bottom:10px;">🎉</div>
+              <div style="font-size:20px;font-weight:800;margin-bottom:8px;">Bra jobbat! All caught up!</div>
+              <div style="font-size:14px;color:#64748b;margin-bottom:20px;line-height:1.5;">
+                You've completed all due Swedish flashcards for now. Highlight new words in Chrome or practice again below.
+              </div>
+              <button class="reveal-btn" id="reset-due-btn">↻ Practice All Cards Again</button>
+            </div>
+          `;
+          document.getElementById("reset-due-btn").onclick = () => {
+            cards = cards.map((c) => ({ ...c, fsrs: { ...c.fsrs, due: new Date().toISOString() } }));
+            saveLocal();
+            render();
+          };
+          return;
+        }
+
+        const effMode = studyMode !== "auto" ? studyMode : (curr.fsrs?.stability || 0) >= 2 ? "cloze" : "recognition";
+        const bannerBg = curr.swedish.article === "en" ? "#0284c7" : curr.swedish.article === "ett" ? "#16a34a" : "#005B99";
+        const badgeText = curr.swedish.article ? `${curr.swedish.article.toUpperCase()}-ORD` : (curr.swedish.partOfSpeech || "SV").toUpperCase();
+        const fullWord = curr.swedish.article ? `${curr.swedish.article} ${curr.swedish.lemma}` : curr.swedish.lemma;
+
+        const clozeSentence = (curr.swedish.contextSentence || "").replace(
+          new RegExp((curr.swedish.surfaceForm || curr.swedish.lemma || "___"), "gi"),
+          "[ ______ ]"
+        );
+
+        const int1 = scheduleCard(curr.fsrs, 1).intervalLabel;
+        const int2 = scheduleCard(curr.fsrs, 2).intervalLabel;
+        const int3 = scheduleCard(curr.fsrs, 3).intervalLabel;
+        const int4 = scheduleCard(curr.fsrs, 4).intervalLabel;
+
+        main.innerHTML = `
+          <div class="mode-bar">
+            <button class="mode-chip ${studyMode === "auto" ? "active" : ""}" data-m="auto">🧠 Smart FSRS</button>
+            <button class="mode-chip ${studyMode === "recognition" ? "active" : ""}" data-m="recognition">🇸🇪→🇬🇧 Recognition</button>
+            <button class="mode-chip ${studyMode === "cloze" ? "active" : ""}" data-m="cloze">🖼️→🇸🇪 Cloze Recall</button>
+          </div>
+
+          <div class="flashcard">
+            <div class="card-banner" style="background:${bannerBg}">
+              <span class="gender-tag">${badgeText}</span>
+              <span>Stability: ${curr.fsrs?.stability || 0}d • Reps: ${curr.fsrs?.reps || 0}</span>
+            </div>
+            <div class="card-body">
+              ${
+                effMode === "recognition"
+                  ? `
+                    <div class="sv-word-big">${fullWord}</div>
+                    <button class="audio-btn" id="play-front-btn">🔊 Listen (${curr.media?.audioSource || "Dictionary"})</button>
+                    ${curr.swedish.contextSentence ? `<div class="context-quote">”${curr.swedish.contextSentence}”</div>` : ""}
+                  `
+                  : `
+                    ${curr.media?.imageUrl ? `<img class="card-img" src="${curr.media.imageUrl}" alt="" />` : ""}
+                    <div style="font-size:22px;font-weight:800;margin-bottom:10px;">${curr.english.lemmaTranslation}</div>
+                    <div class="context-quote">”${clozeSentence}”</div>
+                  `
+              }
+
+              ${
+                !isRevealed
+                  ? `<button class="reveal-btn" id="reveal-btn">👀 Show Answer & Audio</button>`
+                  : `
+                    <div class="divider"></div>
+                    ${effMode === "recognition" && curr.media?.imageUrl ? `<img class="card-img" src="${curr.media.imageUrl}" alt="" />` : ""}
+                    <div class="answer-headline">
+                      ${effMode === "recognition" ? curr.english.lemmaTranslation : fullWord}
+                    </div>
+                    ${curr.swedish.inflections ? `<div class="meta-line"><b>Forms:</b> ${curr.swedish.inflections}</div>` : ""}
+                    ${curr.swedish.definitionSv ? `<div class="meta-line"><b>🇸🇪 Ordbok:</b> ${curr.swedish.definitionSv}</div>` : ""}
+                    ${curr.english.sentenceTranslation ? `<div class="meta-line">🇬🇧 ”${curr.english.sentenceTranslation}”</div>` : ""}
+
+                    <div class="rating-grid">
+                      <button class="rate-btn" data-r="1" style="background:#ef4444"><span class="rate-int">${int1}</span><span class="rate-lbl">Again</span></button>
+                      <button class="rate-btn" data-r="2" style="background:#f59e0b"><span class="rate-int">${int2}</span><span class="rate-lbl">Hard</span></button>
+                      <button class="rate-btn" data-r="3" style="background:#10b981"><span class="rate-int">${int3}</span><span class="rate-lbl">Good</span></button>
+                      <button class="rate-btn" data-r="4" style="background:#0284c7"><span class="rate-int">${int4}</span><span class="rate-lbl">Easy</span></button>
+                    </div>
+                  `
+              }
+            </div>
+          </div>
+        `;
+
+        main.querySelectorAll(".mode-chip").forEach((btn) => {
+          btn.onclick = () => { studyMode = btn.dataset.m; render(); };
+        });
+
+        const playBtn = document.getElementById("play-front-btn");
+        if (playBtn) playBtn.onclick = () => playAudio(curr);
+
+        const revBtn = document.getElementById("reveal-btn");
+        if (revBtn) {
+          revBtn.onclick = () => {
+            isRevealed = true;
+            playAudio(curr);
+            render();
+          };
+        }
+
+        main.querySelectorAll(".rate-btn").forEach((btn) => {
+          btn.onclick = () => {
+            const r = Number(btn.dataset.r);
+            const { nextState } = scheduleCard(curr.fsrs, r, new Date());
+            const updated = { ...curr, fsrs: nextState };
+            cards = cards.map((c) => (c.id === updated.id ? updated : c));
+            isRevealed = false;
+            saveLocal();
+            pushCardUpdateToFirestore(updated);
+            render();
+          };
+        });
+      } else if (activeTab === "deck") {
+        main.innerHTML = cards
+          .map(
+            (c) => `
+          <div class="deck-item">
+            ${c.media?.imageUrl ? `<img class="deck-thumb" src="${c.media.imageUrl}" alt="" />` : `<div class="deck-thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px;">🇸🇪</div>`}
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:16px;font-weight:800;">${c.swedish.article ? c.swedish.article + " " : ""}${c.swedish.lemma}</div>
+              <div style="font-size:13.5px;color:#475569;">${c.english.lemmaTranslation}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;">Stability: ${c.fsrs?.stability || 0}d • Reps: ${c.fsrs?.reps || 0}</div>
+            </div>
+            <button class="audio-btn deck-play" data-id="${c.id}" style="margin:0;padding:8px 12px;">🔊</button>
+          </div>
+        `
+          )
+          .join("");
+
+        main.querySelectorAll(".deck-play").forEach((btn) => {
+          btn.onclick = () => {
+            const card = cards.find((c) => c.id === btn.dataset.id);
+            if (card) playAudio(card);
+          };
+        });
+      } else if (activeTab === "settings") {
+        main.innerHTML = `
+          <div class="flashcard" style="padding:18px;">
+            <div style="font-size:18px;font-weight:800;margin-bottom:6px;">☁️ Firebase Cloud Firestore Sync</div>
+            <div style="font-size:13px;color:#64748b;margin-bottom:16px;line-height:1.45;">
+              Enter your free Firebase Spark Project ID to sync Swedish words saved from the Chrome Extension.
+            </div>
+            <label style="font-size:12px;font-weight:700;">Firebase Project ID</label>
+            <input class="input-box" id="inp-pid" placeholder="e.g. svenska-vocab-12345" value="${settings.firebaseProjectId || ""}" />
+            <label style="font-size:12px;font-weight:700;">Firebase Web API Key (Optional)</label>
+            <input class="input-box" id="inp-key" type="password" placeholder="AIzaSy..." value="${settings.firebaseApiKey || ""}" />
+            <button class="reveal-btn" id="sync-now-btn">☁️ Save & Sync with Firestore</button>
+            ${syncStatusMsg ? `<div style="margin-top:12px;font-size:13px;font-weight:700;color:#005B99;text-align:center;">${syncStatusMsg}</div>` : ""}
+          </div>
+        `;
+        document.getElementById("sync-now-btn").onclick = () => {
+          settings.firebaseProjectId = document.getElementById("inp-pid").value.trim();
+          settings.firebaseApiKey = document.getElementById("inp-key").value.trim();
+          localStorage.setItem("svenska_pwa_settings", JSON.stringify(settings));
+          syncFromFirestore();
+        };
+      }
+    }
+
+    document.querySelectorAll(".nav-btn").forEach((btn) => {
+      btn.onclick = () => {
+        activeTab = btn.dataset.tab;
+        render();
+      };
+    });
+
+    if (settings.firebaseProjectId) syncFromFirestore();
+    render();
+  </script>
+</body>
+</html>

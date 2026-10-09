@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SvenskaSpaced</title>
+  <style>
+    :root {
+      --sv-blue: #005B99;
+      --sv-blue-dark: #004270;
+      --sv-yellow: #FECC02;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --muted: #64748b;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+    }
+    body {
+      width: 380px;
+      min-height: 480px;
+      max-height: 580px;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: linear-gradient(135deg, var(--sv-blue) 0%, var(--sv-blue-dark) 100%);
+      color: #fff;
+      padding: 14px 16px 10px;
+    }
+    .header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .cloud-pill {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.16);
+      font-weight: 600;
+    }
+    .tabs {
+      display: flex;
+      gap: 6px;
+    }
+    .tab-btn {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.12);
+      border: none;
+      color: rgba(255, 255, 255, 0.85);
+      padding: 7px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tab-btn.active {
+      background: var(--sv-yellow);
+      color: #0f172a;
+      font-weight: 700;
+    }
+    main {
+      padding: 12px 14px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .search-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .search-bar input {
+      flex: 1;
+      padding: 8px 11px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      font-size: 13px;
+      outline: none;
+    }
+    .search-bar input:focus {
+      border-color: var(--sv-blue);
+    }
+    .btn-primary {
+      background: var(--sv-blue);
+      color: #fff;
+      border: none;
+      border-radius: 9px;
+      padding: 8px 12px;
+      font-size: 12.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-primary:hover {
+      background: var(--sv-blue-dark);
+    }
+    .word-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .word-item {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .word-thumb {
+      width: 52px;
+      height: 52px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: #e2e8f0;
+      flex-shrink: 0;
+    }
+    .word-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .word-sv {
+      font-size: 14px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .badge-en { background: #bae6fd; color: #0369a1; }
+    .badge-ett { background: #bbf7d0; color: #15803d; }
+    .badge-other { background: #fef08a; color: #854d0e; }
+    .word-en {
+      font-size: 12.5px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 2px;
+    }
+    .word-actions {
+      display: flex;
+      gap: 4px;
+    }
+    .icon-btn {
+      background: #f1f5f9;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 30px;
+      height: 30px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+    }
+    .icon-btn:hover {
+      background: #e2e8f0;
+    }
+    .form-group {
+      margin-bottom: 12px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 12.5px;
+    }
+    .form-hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 3px;
+      line-height: 1.35;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 32px 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .status-banner {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-top">
+      <div class="brand">
+        <span>🇸🇪</span>
+        <span>SvenskaSpaced</span>
+      </div>
+      <span class="cloud-pill" id="cloud-status">Local Mode</span>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="deck">My Deck (<span id="deck-count">0</span>)</button>
+      <button class="tab-btn" data-tab="lookup">+ Quick Add</button>
+      <button class="tab-btn" data-tab="settings">⚙️ Cloud Setup</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- TAB 1: SAVED DECK -->
+    <section id="tab-deck">
+      <div class="word-list" id="word-list"></div>
+    </section>
+
+    <!-- TAB 2: QUICK ADD -->
+    <section id="tab-lookup" style="display:none;">
+      <div class="search-bar">
+        <input type="text" id="quick-word-input" placeholder="Enter a Swedish word (e.g. tågstationerna)…" />
+        <button class="btn-primary" id="quick-search-btn">Look Up</button>
+      </div>
+      <div id="quick-result">
+        <div class="empty-state">
+          Type any Swedish word above or <b>highlight text on any webpage</b> to fetch its dictionary entry, native audio, and 1st Google Image.
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: SETTINGS -->
+    <section id="tab-settings" style="display:none;">
+      <div class="form-group">
+        <label>Firebase Project ID (Free Spark Plan)</label>
+        <input type="text" id="cfg-project-id" placeholder="e.g. svenska-vocab-12345" />
+        <div class="form-hint">Create a free project at console.firebase.google.com → Firestore Database (Start in Test Mode). No credit card required.</div>
+      </div>
+      <div class="form-group">
+        <label>Firebase Web API Key (Optional)</label>
+        <input type="password" id="cfg-firebase-key" placeholder="AIzaSy..." />
+      </div>
+      <div class="form-group">
+        <label>Gemini API Key (Optional — Google AI Studio Free Tier)</label>
+        <input type="password" id="cfg-gemini-key" placeholder="AIzaSy..." />
+        <div class="form-hint">Enhances inflection analysis (en/ett & context sentences). Even without it, Swedish Wiktionary + Google Translate work out of the box!</div>
+      </div>
+      <button class="btn-primary" id="save-settings-btn" style="width:100%; margin-bottom:8px;">Save Settings</button>
+      <button class="btn-primary" id="sync-cloud-btn" style="width:100%; background:#0f172a;">☁️ Sync All Local Words to Firestore</button>
+      <div class="status-banner" id="settings-status"></div>
+    </section>
+  </main>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
