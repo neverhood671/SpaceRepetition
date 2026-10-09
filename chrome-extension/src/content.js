@@ -22,15 +22,10 @@
   // SVT Play Subtitle Overlay state
   let subOverlayWrap = null;
   let subLinesEl = null;
-  let subHistoryDrawerEl = null;
-  let subStatusBadgeEl = null;
   let observedSubContainer = null;
   let subMutationObserver = null;
   let autoPausedVideo = null;
   let isCardOpen = false;
-  let isHistoryOpen = false;
-  let lastSubtitleSentence = "";
-  const subtitleHistory = []; // Array of { lines: string[], sentence: string, time: string }
   let selectedSubtitleTokens = []; // Array of { word: string, tokenIndex: number, sentence: string, el: HTMLElement }
 
   let currentSelectionData = null;
@@ -379,70 +374,6 @@
         text-shadow: none;
         box-shadow: 0 0 0 2px #005B99;
       }
-      .sv-sub-controls {
-        display: flex;
-         flex-direction: column;
-        align-items: center;
-        gap: 4px;
-        border-left: 1px solid rgba(255, 255, 255, 0.18);
-        padding-left: 10px;
-      }
-      .sv-sub-hist-btn {
-        background: rgba(255, 255, 255, 0.14);
-        border: none;
-        color: #ffffff;
-        border-radius: 8px;
-        padding: 4px 8px;
-        font-size: 11px;
-        font-weight: 700;
-        cursor: pointer;
-        white-space: nowrap;
-      }
-      .sv-sub-hist-btn:hover {
-        background: #005B99;
-      }
-      .sv-sub-status {
-        font-size: 10px;
-        color: #FECC02;
-        font-weight: 700;
-        white-space: nowrap;
-      }
-      .sv-sub-history-drawer {
-        pointer-events: auto;
-        display: none;
-        flex-direction: column;
-        gap: 6px;
-        background: rgba(15, 23, 42, 0.95);
-        border: 1px solid rgba(254, 204, 2, 0.45);
-        border-radius: 12px;
-        padding: 10px 14px;
-        margin-bottom: 8px;
-        max-height: 220px;
-        overflow-y: auto;
-        width: min(620px, 90vw);
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
-      }
-      .sv-hist-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 11.5px;
-        font-weight: 700;
-        color: #94a3b8;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        padding-bottom: 6px;
-        margin-bottom: 2px;
-      }
-      .sv-hist-item {
-        font-size: 14px;
-        color: #f8fafc;
-        padding: 4px 6px;
-        border-radius: 6px;
-        line-height: 1.4;
-      }
-      .sv-hist-item:hover {
-        background: rgba(255, 255, 255, 0.06);
-      }
     `;
     shadowRoot.appendChild(style);
 
@@ -463,13 +394,8 @@
     subOverlayWrap = document.createElement("div");
     subOverlayWrap.className = "sv-sub-overlay-wrap";
     subOverlayWrap.innerHTML = `
-      <div class="sv-sub-history-drawer" id="sv-sub-history"></div>
       <div class="sv-sub-bar" id="sv-sub-bar">
         <div class="sv-sub-lines" id="sv-sub-lines"></div>
-        <div class="sv-sub-controls">
-          <button class="sv-sub-hist-btn" id="sv-hist-toggle" title="Show recent subtitles">🕘 History</button>
-          <span class="sv-sub-status" id="sv-sub-status"></span>
-        </div>
       </div>
     `;
 
@@ -482,8 +408,6 @@
 
     const subBar = subOverlayWrap.querySelector("#sv-sub-bar");
     subLinesEl = subOverlayWrap.querySelector("#sv-sub-lines");
-    subHistoryDrawerEl = subOverlayWrap.querySelector("#sv-sub-history");
-    subStatusBadgeEl = subOverlayWrap.querySelector("#sv-sub-status");
 
     // Auto-pause SVT Play video when hovering the subtitle bar
     subBar.addEventListener("mouseenter", () => {
@@ -491,21 +415,8 @@
     });
 
     subBar.addEventListener("mouseleave", () => {
-      if (!isCardOpen && !isHistoryOpen) {
+      if (!isCardOpen) {
         resumeVideoIfAutoPaused();
-      }
-    });
-
-    subOverlayWrap.querySelector("#sv-hist-toggle")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      isHistoryOpen = !isHistoryOpen;
-      if (isHistoryOpen) {
-        pauseVideoIfPlaying();
-        renderSubtitleHistoryDrawer();
-        subHistoryDrawerEl.style.display = "flex";
-      } else {
-        subHistoryDrawerEl.style.display = "none";
-        if (!isCardOpen) resumeVideoIfAutoPaused();
       }
     });
 
@@ -541,9 +452,6 @@
     if (video && !video.paused) {
       video.pause();
       autoPausedVideo = video;
-      if (subStatusBadgeEl) {
-        subStatusBadgeEl.textContent = "⏸ Paused";
-      }
     }
   }
 
@@ -552,9 +460,6 @@
       autoPausedVideo.play().catch(() => {});
     }
     autoPausedVideo = null;
-    if (subStatusBadgeEl) {
-      subStatusBadgeEl.textContent = "";
-    }
   }
 
   function clearSelectedSubtitleTokens() {
@@ -645,52 +550,6 @@
     return { lineDiv, nextTokenIndex: tokenCounter };
   }
 
-  function renderSubtitleHistoryDrawer() {
-    if (!subHistoryDrawerEl) return;
-    subHistoryDrawerEl.innerHTML = "";
-
-    const header = document.createElement("div");
-    header.className = "sv-hist-header";
-    header.innerHTML = `<span>🕘 Recent Subtitles (Click word • ⌘+Click for partikelverb)</span><span style="cursor:pointer;color:#fff;" id="sv-close-hist">✕</span>`;
-    header.querySelector("#sv-close-hist")?.addEventListener("click", () => {
-      isHistoryOpen = false;
-      subHistoryDrawerEl.style.display = "none";
-      if (!isCardOpen) resumeVideoIfAutoPaused();
-    });
-    subHistoryDrawerEl.appendChild(header);
-
-    if (subtitleHistory.length === 0) {
-      const empty = document.createElement("div");
-      empty.style.cssText = "color:#94a3b8;font-size:12px;padding:8px 0;";
-      empty.textContent = "No subtitles captured yet.";
-      subHistoryDrawerEl.appendChild(empty);
-      return;
-    }
-
-    for (const item of subtitleHistory) {
-      const row = document.createElement("div");
-      row.className = "sv-hist-item";
-      let histTokenIdx = 0;
-      const parts = item.sentence.split(/([\p{L}\p{N}-]+)/gu);
-      for (const part of parts) {
-        if (!part) continue;
-        if (/^[\p{L}\p{N}-]+$/u.test(part)) {
-          const thisIdx = histTokenIdx++;
-          const w = document.createElement("span");
-          w.className = "sv-sub-word";
-          w.textContent = part;
-          w.addEventListener("click", (e) =>
-            handleSubtitleWordClick(e, part, thisIdx, item.sentence, w)
-          );
-          row.appendChild(w);
-        } else {
-          row.appendChild(document.createTextNode(part));
-        }
-      }
-      subHistoryDrawerEl.appendChild(row);
-    }
-  }
-
   /**
    * Read SVT Play's [data-rt="subtitles-container"] spans and render our interactive overlay
    */
@@ -716,26 +575,11 @@
     }
 
     if (lines.length === 0) {
-      // No active subtitle right now; keep overlay visible only if history drawer is open
-      if (!isHistoryOpen) {
-        subOverlayWrap.style.display = "none";
-      }
+      subOverlayWrap.style.display = "none";
       return;
     }
 
     const fullSentence = lines.join(" ").replace(/\s+/g, " ").trim();
-
-    // Record in rolling history (up to 8 recent sentences)
-    if (fullSentence && fullSentence !== lastSubtitleSentence) {
-      lastSubtitleSentence = fullSentence;
-      if (!subtitleHistory.some((h) => h.sentence === fullSentence)) {
-        subtitleHistory.unshift({ lines, sentence: fullSentence });
-        if (subtitleHistory.length > 8) subtitleHistory.pop();
-      }
-      if (isHistoryOpen) {
-        renderSubtitleHistoryDrawer();
-      }
-    }
 
     subLinesEl.innerHTML = "";
     let runningTokenIndex = 0;
@@ -834,9 +678,7 @@
     clearSelectedSubtitleTokens();
     if (isCardOpen) {
       isCardOpen = false;
-      if (!isHistoryOpen) {
-        resumeVideoIfAutoPaused();
-      }
+      resumeVideoIfAutoPaused();
     }
   }
 
