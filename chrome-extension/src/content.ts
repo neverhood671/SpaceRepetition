@@ -1,39 +1,67 @@
+type CardMediaInfo = import("./types.js").CardMediaInfo;
+type EnrichmentPayload = import("./types.js").EnrichmentPayload;
+type ExtensionResponse<T = unknown> = import("./types.js").ExtensionResponse<T>;
+type SaveCardResult = import("./types.js").SaveCardResult;
+
 /**
- * Content Script for SvenskaSpaced Chrome Extension
+ * Content Script for SvenskaSpaced Chrome Extension (TypeScript)
  * Features:
  * 1. Universal webpage Swedish word selection -> Floating Dictionary + Google Image + Audio Card
  * 2. Dedicated SVT Play (svtplay.se) Interactive Subtitle Overlay:
  *    - Watches [data-rt="subtitles-container"] via MutationObserver
  *    - Renders high-z-index clickable word chips on top of the video player
+ *    - Supports ⌘+Click (or Ctrl+Click) multi-word selection for Swedish partikelverb
  *    - Auto-pauses video[data-rt="video-player"] on subtitle hover & auto-resumes on leave/close
- *    - Rolling 8-line subtitle history drawer so you never miss a fast subtitle
  *    - Fullscreen-aware mounting
  */
+
+interface BoundingRectLike {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+  width?: number;
+}
+
+interface SelectionLookupData {
+  word: string;
+  contextSentence: string;
+  rect: BoundingRectLike;
+}
+
+interface SelectedSubtitleToken {
+  word: string;
+  tokenIndex: number;
+  sentence: string;
+  el: HTMLElement;
+}
 
 (function () {
   if (window.__svenskaSpacedInjected) return;
   window.__svenskaSpacedInjected = true;
 
-  let hostEl = null;
-  let shadowRoot = null;
-  let triggerBtn = null;
-  let popoverEl = null;
+  let hostEl: HTMLDivElement | null = null;
+  let shadowRoot: ShadowRoot | null = null;
+  let triggerBtn: HTMLButtonElement | null = null;
+  let popoverEl: HTMLDivElement | null = null;
 
   // SVT Play Subtitle Overlay state
-  let subOverlayWrap = null;
-  let subLinesEl = null;
-  let observedSubContainer = null;
-  let subMutationObserver = null;
-  let autoPausedVideo = null;
+  let subOverlayWrap: HTMLDivElement | null = null;
+  let subLinesEl: HTMLDivElement | null = null;
+  let observedSubContainer: HTMLElement | null = null;
+  let subMutationObserver: MutationObserver | null = null;
+  let autoPausedVideo: HTMLVideoElement | null = null;
   let isCardOpen = false;
-  let selectedSubtitleTokens = []; // Array of { word: string, tokenIndex: number, sentence: string, el: HTMLElement }
+  let selectedSubtitleTokens: SelectedSubtitleToken[] = [];
 
-  let currentSelectionData = null;
-  let currentEnrichment = null;
+  let currentSelectionData: SelectionLookupData | null = null;
+  let currentEnrichment: EnrichmentPayload | null = null;
   let currentImageIdx = 0;
 
-  function initShadowHost() {
-    const targetParent = document.fullscreenElement || document.documentElement;
+  function initShadowHost(): void {
+    const targetParent =
+      (document.fullscreenElement as HTMLElement | null) ||
+      document.documentElement;
     if (hostEl) {
       if (hostEl.parentElement !== targetParent) {
         targetParent.appendChild(hostEl);
@@ -381,7 +409,7 @@
     triggerBtn = document.createElement("button");
     triggerBtn.className = "sv-trigger-pill";
     triggerBtn.innerHTML = `<span>🇸🇪</span><span>Translate & Save</span>`;
-    triggerBtn.addEventListener("mousedown", (e) => {
+    triggerBtn.addEventListener("mousedown", (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
       if (currentSelectionData) {
@@ -399,22 +427,26 @@
       </div>
     `;
 
-    // Prevent clicks on subtitle bar from reaching SVT Play's video click-shield
-    ["mousedown", "mouseup", "click", "dblclick", "pointerdown"].forEach((evtName) => {
-      subOverlayWrap.addEventListener(evtName, (e) => {
-        e.stopPropagation();
-      });
-    });
+    ["mousedown", "mouseup", "click", "dblclick", "pointerdown"].forEach(
+      (evtName) => {
+        subOverlayWrap?.addEventListener(evtName, (e: Event) => {
+          e.stopPropagation();
+        });
+      }
+    );
 
-    const subBar = subOverlayWrap.querySelector("#sv-sub-bar");
-    subLinesEl = subOverlayWrap.querySelector("#sv-sub-lines");
+    const subBar = subOverlayWrap.querySelector(
+      "#sv-sub-bar"
+    ) as HTMLDivElement | null;
+    subLinesEl = subOverlayWrap.querySelector(
+      "#sv-sub-lines"
+    ) as HTMLDivElement | null;
 
-    // Auto-pause SVT Play video when hovering the subtitle bar
-    subBar.addEventListener("mouseenter", () => {
+    subBar?.addEventListener("mouseenter", () => {
       pauseVideoIfPlaying();
     });
 
-    subBar.addEventListener("mouseleave", () => {
+    subBar?.addEventListener("mouseleave", () => {
       if (!isCardOpen) {
         resumeVideoIfAutoPaused();
       }
@@ -426,28 +458,24 @@
     popoverEl = document.createElement("div");
     popoverEl.className = "sv-popover";
     ["mousedown", "mouseup", "click", "dblclick"].forEach((evtName) => {
-      popoverEl.addEventListener(evtName, (e) => e.stopPropagation());
+      popoverEl?.addEventListener(evtName, (e: Event) => e.stopPropagation());
     });
     shadowRoot.appendChild(popoverEl);
   }
 
-  // Keep Shadow Host inside fullscreen element when toggling fullscreen on SVT Play
   document.addEventListener("fullscreenchange", () => {
     initShadowHost();
     updateSubtitleOverlayPosition();
   });
 
-  /**
-   * Auto-pause SVT Play's <video data-rt="video-player"> while inspecting subtitles
-   */
-  function getVideoElement() {
+  function getVideoElement(): HTMLVideoElement | null {
     return (
-      document.querySelector('video[data-rt="video-player"]') ||
-      document.querySelector("video")
+      document.querySelector<HTMLVideoElement>('video[data-rt="video-player"]') ||
+      document.querySelector<HTMLVideoElement>("video")
     );
   }
 
-  function pauseVideoIfPlaying() {
+  function pauseVideoIfPlaying(): void {
     const video = getVideoElement();
     if (video && !video.paused) {
       video.pause();
@@ -455,21 +483,27 @@
     }
   }
 
-  function resumeVideoIfAutoPaused() {
+  function resumeVideoIfAutoPaused(): void {
     if (autoPausedVideo && autoPausedVideo.paused) {
       autoPausedVideo.play().catch(() => {});
     }
     autoPausedVideo = null;
   }
 
-  function clearSelectedSubtitleTokens() {
+  function clearSelectedSubtitleTokens(): void {
     for (const t of selectedSubtitleTokens) {
       t.el?.classList?.remove("selected");
     }
     selectedSubtitleTokens = [];
   }
 
-  function handleSubtitleWordClick(e, word, tokenIndex, fullSentence, wordSpan) {
+  function handleSubtitleWordClick(
+    e: MouseEvent,
+    word: string,
+    tokenIndex: number,
+    fullSentence: string,
+    wordSpan: HTMLElement
+  ): void {
     e.preventDefault();
     e.stopPropagation();
     pauseVideoIfPlaying();
@@ -502,7 +536,6 @@
         });
         wordSpan.classList.add("selected");
       }
-      // Keep selected words in sentence order (e.g., "höll" + "till" -> "höll till")
       selectedSubtitleTokens.sort((a, b) => a.tokenIndex - b.tokenIndex);
     }
 
@@ -521,15 +554,15 @@
     });
   }
 
-  /**
-   * Tokenize a Swedish line into clickable word chips + preserved punctuation/spaces
-   */
-  function renderTokenizedLine(lineText, fullSentence, startTokenIndex = 0) {
+  function renderTokenizedLine(
+    lineText: string,
+    fullSentence: string,
+    startTokenIndex = 0
+  ): { lineDiv: HTMLDivElement; nextTokenIndex: number } {
     const lineDiv = document.createElement("div");
     lineDiv.className = "sv-sub-line";
     let tokenCounter = startTokenIndex;
 
-    // Split keeping Swedish words (letters, numbers, hyphens) as tokens
     const parts = lineText.split(/([\p{L}\p{N}-]+)/gu);
     for (const part of parts) {
       if (!part) continue;
@@ -538,8 +571,9 @@
         const wordSpan = document.createElement("span");
         wordSpan.className = "sv-sub-word";
         wordSpan.textContent = part;
-        wordSpan.title = "Click to look up • ⌘+Click (or Ctrl+Click) to combine multiple words (partikelverb)";
-        wordSpan.addEventListener("click", (e) =>
+        wordSpan.title =
+          "Click to look up • ⌘+Click (or Ctrl+Click) to combine multiple words (partikelverb)";
+        wordSpan.addEventListener("click", (e: MouseEvent) =>
           handleSubtitleWordClick(e, part, thisIdx, fullSentence, wordSpan)
         );
         lineDiv.appendChild(wordSpan);
@@ -550,27 +584,30 @@
     return { lineDiv, nextTokenIndex: tokenCounter };
   }
 
-  /**
-   * Read SVT Play's [data-rt="subtitles-container"] spans and render our interactive overlay
-   */
-  function syncSvtSubtitles() {
+  function syncSvtSubtitles(): void {
     if (!observedSubContainer) return;
     initShadowHost();
+    if (!subOverlayWrap || !subLinesEl) return;
 
-    // Hide SVT Play's native text visually so we don't see duplicate text, while keeping DOM active
     observedSubContainer.style.opacity = "0";
     observedSubContainer.style.pointerEvents = "none";
 
-    // Extract leaf <span> elements so adjacent spans don't merge words without a space
-    const leafSpans = Array.from(observedSubContainer.querySelectorAll("span")).filter(
-      (s) => s.children.length === 0 && s.textContent.trim().length > 0
+    const leafSpans = Array.from(
+      observedSubContainer.querySelectorAll("span")
+    ).filter(
+      (s) => s.children.length === 0 && (s.textContent || "").trim().length > 0
     );
 
-    let lines = leafSpans.map((s) => s.textContent.replace(/\s+/g, " ").trim());
+    let lines = leafSpans.map((s) =>
+      (s.textContent || "").replace(/\s+/g, " ").trim()
+    );
     if (lines.length === 0) {
       const raw = observedSubContainer.innerText?.trim() || "";
       if (raw) {
-        lines = raw.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+        lines = raw
+          .split(/\n+/)
+          .map((l) => l.trim())
+          .filter(Boolean);
       }
     }
 
@@ -597,7 +634,7 @@
     updateSubtitleOverlayPosition();
   }
 
-  function updateSubtitleOverlayPosition() {
+  function updateSubtitleOverlayPosition(): void {
     if (!subOverlayWrap || subOverlayWrap.style.display === "none") return;
     const video = getVideoElement() || observedSubContainer;
     if (!video) return;
@@ -605,19 +642,20 @@
     const rect = video.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
 
-    // Position centered horizontally over the video player, ~68px above bottom of video
-    const bottomOffset = Math.max(24, window.innerHeight - rect.bottom + Math.min(72, rect.height * 0.12));
+    const bottomOffset = Math.max(
+      24,
+      window.innerHeight - rect.bottom + Math.min(72, rect.height * 0.12)
+    );
     subOverlayWrap.style.left = `${Math.round(rect.left)}px`;
     subOverlayWrap.style.width = `${Math.round(rect.width)}px`;
     subOverlayWrap.style.bottom = `${Math.round(bottomOffset)}px`;
   }
 
-  /**
-   * Watch for SVT Play's [data-rt="subtitles-container"] appearing or updating
-   */
-  function setupSvtPlayWatcher() {
+  function setupSvtPlayWatcher(): void {
     const checkContainer = () => {
-      const container = document.querySelector('[data-rt="subtitles-container"]');
+      const container = document.querySelector<HTMLElement>(
+        '[data-rt="subtitles-container"]'
+      );
       if (container && container !== observedSubContainer) {
         observedSubContainer = container;
         if (subMutationObserver) subMutationObserver.disconnect();
@@ -640,23 +678,24 @@
     checkContainer();
     setInterval(checkContainer, 1000);
     window.addEventListener("resize", updateSubtitleOverlayPosition);
-    window.addEventListener("scroll", updateSubtitleOverlayPosition, { passive: true });
+    window.addEventListener("scroll", updateSubtitleOverlayPosition, {
+      passive: true
+    });
   }
 
   setupSvtPlayWatcher();
 
-  /**
-   * Extract the sentence surrounding a normal webpage text selection
-   */
-  function extractContextSentence(selection) {
+  function extractContextSentence(selection: Selection | null): string {
     try {
       if (!selection || selection.rangeCount === 0) return "";
       const range = selection.getRangeAt(0);
       const container = range.commonAncestorContainer;
       const blockText =
         (container.nodeType === Node.TEXT_NODE
-          ? container.parentElement?.innerText || container.textContent
-          : container.innerText || container.textContent) || "";
+          ? (container.parentElement as HTMLElement | null)?.innerText ||
+            container.textContent
+          : (container as HTMLElement).innerText || container.textContent) ||
+        "";
 
       const selectedWord = selection.toString().trim();
       const cleanBlock = blockText.replace(/\s+/g, " ").trim();
@@ -672,7 +711,7 @@
     }
   }
 
-  function hideAll() {
+  function hideAll(): void {
     if (triggerBtn) triggerBtn.style.display = "none";
     if (popoverEl) popoverEl.style.display = "none";
     clearSelectedSubtitleTokens();
@@ -682,22 +721,29 @@
     }
   }
 
-  function positionElementNearRect(el, rect, width = 355, height = 390) {
+  function positionElementNearRect(
+    el: HTMLElement,
+    rect: BoundingRectLike,
+    width = 355,
+    height = 390
+  ): void {
     const margin = 12;
-    let left = Math.min(
+    const left = Math.min(
       Math.max(margin, rect.left + (rect.width || 0) / 2 - width / 2),
       window.innerWidth - width - margin
     );
-    // Prefer placing above the word if the word is in the lower half of the screen (like subtitles!)
     let top = rect.bottom + 10;
-    if (rect.top > window.innerHeight * 0.55 || top + height > window.innerHeight - margin) {
+    if (
+      rect.top > window.innerHeight * 0.55 ||
+      top + height > window.innerHeight - margin
+    ) {
       top = Math.max(margin, rect.top - height - 12);
     }
     el.style.left = `${Math.round(left)}px`;
     el.style.top = `${Math.round(Math.max(margin, top))}px`;
   }
 
-  function playPronunciation(media) {
+  function playPronunciation(media: Partial<CardMediaInfo> | undefined): void {
     const src = media?.audioBase64 || media?.audioUrl;
     if (!src) return;
     const audio = new Audio(src);
@@ -714,8 +760,9 @@
     });
   }
 
-  function openLookupPopover(selData) {
+  function openLookupPopover(selData: SelectionLookupData): void {
     initShadowHost();
+    if (!triggerBtn || !popoverEl) return;
     isCardOpen = true;
     triggerBtn.style.display = "none";
     popoverEl.style.display = "block";
@@ -748,8 +795,8 @@
           sourceTitle: document.title
         }
       },
-      (response) => {
-        if (chrome.runtime.lastError || !response?.ok) {
+      (response: ExtensionResponse<EnrichmentPayload>) => {
+        if (chrome.runtime.lastError || !response?.ok || !response.data) {
           renderError(
             response?.error ||
               chrome.runtime.lastError?.message ||
@@ -764,8 +811,8 @@
     );
   }
 
-  function renderError(msg) {
-    const body = popoverEl.querySelector(".sv-body");
+  function renderError(msg: string): void {
+    const body = popoverEl?.querySelector(".sv-body");
     if (!body) return;
     body.innerHTML = `
       <div style="color:#dc2626; font-size:13px; padding:12px;">
@@ -774,8 +821,12 @@
     `;
   }
 
-  function renderEnrichedCard(data, rect) {
-    const sw = data.swedish || {};
+  function renderEnrichedCard(
+    data: EnrichmentPayload,
+    rect: BoundingRectLike
+  ): void {
+    if (!popoverEl) return;
+    const sw = data.swedish || { surfaceForm: "", lemma: "" };
     const en = data.english || {};
     const media = data.media || {};
     const alternatives =
@@ -821,7 +872,9 @@
           alternatives.length > 0
             ? `
           <div class="sv-image-wrap">
-            <img id="sv-card-img" src="${escapeHtml(alternatives[0])}" alt="${escapeHtml(sw.lemma)}" />
+            <img id="sv-card-img" src="${escapeHtml(
+              alternatives[0]
+            )}" alt="${escapeHtml(sw.lemma)}" />
             ${
               alternatives.length > 1
                 ? `<button class="sv-next-img-btn" id="sv-next-img">↻ Image 1/${alternatives.length}</button>`
@@ -834,12 +887,16 @@
 
         ${
           sw.inflections
-            ? `<div class="sv-meta-tag"><b>Forms:</b> ${escapeHtml(sw.inflections)}</div>`
+            ? `<div class="sv-meta-tag"><b>Forms:</b> ${escapeHtml(
+                sw.inflections
+              )}</div>`
             : ""
         }
         ${
           sw.definitionSv
-            ? `<div class="sv-meta-tag"><b>Ordbok:</b> ${escapeHtml(sw.definitionSv)}</div>`
+            ? `<div class="sv-meta-tag"><b>Ordbok:</b> ${escapeHtml(
+                sw.definitionSv
+              )}</div>`
             : ""
         }
 
@@ -847,10 +904,14 @@
           sw.contextSentence
             ? `
           <div class="sv-context-box">
-            <div class="sv-context-sv">”${escapeHtml(sw.contextSentence)}”</div>
+            <div class="sv-context-sv">”${escapeHtml(
+              sw.contextSentence
+            )}”</div>
             ${
               en.sentenceTranslation
-                ? `<div class="sv-context-en">${escapeHtml(en.sentenceTranslation)}</div>`
+                ? `<div class="sv-context-en">${escapeHtml(
+                    en.sentenceTranslation
+                  )}</div>`
                 : ""
             }
           </div>
@@ -870,23 +931,35 @@
     positionElementNearRect(popoverEl, rect, 355, 420);
 
     popoverEl.querySelector("#sv-close")?.addEventListener("click", hideAll);
-    popoverEl.querySelector("#sv-play-audio")?.addEventListener("click", () => {
-      playPronunciation(media);
-    });
+    popoverEl
+      .querySelector("#sv-play-audio")
+      ?.addEventListener("click", () => {
+        playPronunciation(media);
+      });
 
-    const nextImgBtn = popoverEl.querySelector("#sv-next-img");
-    const imgEl = popoverEl.querySelector("#sv-card-img");
+    const nextImgBtn = popoverEl.querySelector(
+      "#sv-next-img"
+    ) as HTMLButtonElement | null;
+    const imgEl = popoverEl.querySelector(
+      "#sv-card-img"
+    ) as HTMLImageElement | null;
     if (nextImgBtn && imgEl && alternatives.length > 1) {
       nextImgBtn.addEventListener("click", () => {
         currentImageIdx = (currentImageIdx + 1) % alternatives.length;
         const chosen = alternatives[currentImageIdx];
         imgEl.src = chosen;
-        currentEnrichment.media.imageUrl = chosen;
-        nextImgBtn.textContent = `↻ Image ${currentImageIdx + 1}/${alternatives.length}`;
+        if (currentEnrichment) {
+          currentEnrichment.media.imageUrl = chosen;
+        }
+        nextImgBtn.textContent = `↻ Image ${currentImageIdx + 1}/${
+          alternatives.length
+        }`;
       });
     }
 
-    const saveBtn = popoverEl.querySelector("#sv-save-card");
+    const saveBtn = popoverEl.querySelector(
+      "#sv-save-card"
+    ) as HTMLButtonElement | null;
     saveBtn?.addEventListener("click", () => {
       if (saveBtn.classList.contains("saved")) return;
       saveBtn.textContent = "Saving…";
@@ -895,7 +968,7 @@
           type: "SAVE_CARD",
           payload: currentEnrichment
         },
-        (res) => {
+        (res: ExtensionResponse<SaveCardResult>) => {
           if (res?.ok) {
             saveBtn.classList.add("saved");
             const synced = res.data?.cloudSynced;
@@ -912,7 +985,7 @@
     playPronunciation(media);
   }
 
-  function escapeHtml(str) {
+  function escapeHtml(str: string | undefined): string {
     return String(str || "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
@@ -920,8 +993,7 @@
       .replace(/"/g, "&quot;");
   }
 
-  // Listen for normal text selection on any webpage
-  document.addEventListener("mouseup", (e) => {
+  document.addEventListener("mouseup", (e: MouseEvent) => {
     setTimeout(() => {
       const sel = window.getSelection();
       const rawText = sel ? sel.toString().trim() : "";
@@ -933,6 +1005,7 @@
         return;
       }
 
+      if (!sel || sel.rangeCount === 0) return;
       const range = sel.getRangeAt(0);
       const rect = range.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) return;
@@ -955,12 +1028,13 @@
         return;
       }
 
-      triggerBtn.style.display = "inline-flex";
-      positionElementNearRect(triggerBtn, currentSelectionData.rect, 150, 36);
+      if (triggerBtn) {
+        triggerBtn.style.display = "inline-flex";
+        positionElementNearRect(triggerBtn, currentSelectionData.rect, 150, 36);
+      }
     }, 15);
   });
 
-  // Hide trigger pill / popover when clicking elsewhere on the page
   document.addEventListener("mousedown", () => {
     if (triggerBtn) triggerBtn.style.display = "none";
     if (popoverEl && popoverEl.style.display === "block") {
@@ -968,11 +1042,10 @@
     }
   });
 
-  // Listen for right-click context menu trigger
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "TRIGGER_SELECTION_LOOKUP") {
+  chrome.runtime.onMessage.addListener((msg: any) => {
+    if (msg?.type === "TRIGGER_SELECTION_LOOKUP") {
       const sel = window.getSelection();
-      const rect =
+      const rect: BoundingRectLike =
         sel && sel.rangeCount > 0
           ? sel.getRangeAt(0).getBoundingClientRect()
           : {

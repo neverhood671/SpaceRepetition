@@ -1,0 +1,13 @@
+{
+  "name": "svenska-spaced-chrome-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5"
+  }
+}

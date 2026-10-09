@@ -6,11 +6,46 @@ import {
   deleteCard,
   syncAllLocalToCloud
 } from "./firestore.js";
+import {
+  AnalyzeWordRequest,
+  EnrichmentPayload,
+  ExtensionMessage
+} from "./types.js";
+
+interface WiktionaryParseResult {
+  lemma: string;
+  article: string;
+  partOfSpeech: string;
+  audioUrl: string;
+  audioSource: string;
+  englishFromWiktionary: string;
+  definitionSv: string;
+}
+
+interface GoogleTranslateResult {
+  wordTranslation: string;
+  sentenceTranslation: string;
+  detectedLemma: string;
+  partOfSpeech: string;
+  article: string;
+  synonyms: string[];
+}
+
+interface GeminiEnrichmentResult {
+  lemma?: string;
+  article?: string;
+  partOfSpeech?: string;
+  inflections?: string;
+  lemmaTranslation?: string;
+  contextualTranslation?: string;
+  sentenceTranslation?: string;
+  imageSearchQuery?: string;
+}
 
 /**
  * Clean selected text to a Swedish word or short phrase
  */
-function cleanWord(raw) {
+function cleanWord(raw: string | undefined): string {
   return (raw || "")
     .trim()
     .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
@@ -20,11 +55,14 @@ function cleanWord(raw) {
 /**
  * 1. Query Swedish Wiktionary (sv.wiktionary.org) for:
  *    - Inflection -> Base Lemma resolution ({{böjning|sv|...|lemma}})
+ *    - Multi-word Swedish partikelverb resolution ("höll till" -> "hålla till")
  *    - Grammatical gender (en vs ett via {{sv-subst-n...}} / {{sv-subst-t...}})
  *    - Native human audio filename (ljud=Sv-xxx.ogg)
  *    - Swedish definition & English translations ({{ö+|en|...}})
  */
-async function querySwedishWiktionary(word) {
+async function querySwedishWiktionary(
+  word: string
+): Promise<WiktionaryParseResult | null> {
   const candidates = [word, word.toLowerCase()];
   for (const candidate of candidates) {
     try {
@@ -35,16 +73,18 @@ async function querySwedishWiktionary(word) {
       if (!res.ok) continue;
       const data = await res.json();
       const pages = data?.query?.pages || {};
-      const page = Object.values(pages)[0];
+      const page: any = Object.values(pages)[0];
       if (!page || page.missing !== undefined) continue;
-      const wikitext = page.revisions?.[0]?.["*"] || "";
+      const wikitext: string = page.revisions?.[0]?.["*"] || "";
       if (!wikitext.includes("==Svenska==")) continue;
 
-      // Extract only the ==Svenska== section
-      const svSection = wikitext.split("==Svenska==")[1]?.split(/\n==[^=]/)[0] || wikitext;
+      const svSection =
+        wikitext.split("==Svenska==")[1]?.split(/\n==[^=]/)[0] || wikitext;
 
       // Check if this entry is an inflection of a base lemma: {{böjning|sv|subst|hund}}
-      const inflectionMatch = svSection.match(/\{\{böjning\|sv\|([^|}]+)\|([^|}]+)/i);
+      const inflectionMatch = svSection.match(
+        /\{\{böjning\|sv\|([^|}]+)\|([^|}]+)/i
+      );
       if (inflectionMatch && inflectionMatch[2]) {
         const baseLemma = inflectionMatch[2].trim();
         if (baseLemma.toLowerCase() !== candidate.toLowerCase()) {
@@ -75,7 +115,9 @@ async function querySwedishWiktionary(word) {
         ...tokens.slice(1).map((t) => t.toLowerCase())
       ].join(" ");
       if (reconstructedLemma !== word.toLowerCase()) {
-        const particleEntry = await parseWiktionarySwedishEntry(reconstructedLemma);
+        const particleEntry = await parseWiktionarySwedishEntry(
+          reconstructedLemma
+        );
         if (particleEntry) {
           return {
             ...particleEntry,
@@ -99,7 +141,9 @@ async function querySwedishWiktionary(word) {
   return null;
 }
 
-async function parseWiktionarySwedishEntry(lemma) {
+async function parseWiktionarySwedishEntry(
+  lemma: string
+): Promise<WiktionaryParseResult | null> {
   try {
     const url = `https://sv.wiktionary.org/w/api.php?action=query&titles=${encodeURIComponent(
       lemma
@@ -107,18 +151,21 @@ async function parseWiktionarySwedishEntry(lemma) {
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
-    const page = Object.values(data?.query?.pages || {})[0];
+    const page: any = Object.values(data?.query?.pages || {})[0];
     if (!page || page.missing !== undefined) return null;
-    const wikitext = page.revisions?.[0]?.["*"] || "";
-    const svSection = wikitext.split("==Svenska==")[1]?.split(/\n==[^=]/)[0] || wikitext;
+    const wikitext: string = page.revisions?.[0]?.["*"] || "";
+    const svSection =
+      wikitext.split("==Svenska==")[1]?.split(/\n==[^=]/)[0] || wikitext;
     return await parseWiktionarySection(lemma, svSection);
   } catch {
     return null;
   }
 }
 
-async function parseWiktionarySection(lemma, svSection) {
-  // Determine Part of Speech (including partikelverb)
+async function parseWiktionarySection(
+  lemma: string,
+  svSection: string
+): Promise<WiktionaryParseResult> {
   let partOfSpeech = "word";
   if (/partikelverb|partikel=/i.test(svSection)) partOfSpeech = "partikelverb";
   else if (/===Substantiv===/i.test(svSection)) partOfSpeech = "noun";
@@ -126,34 +173,39 @@ async function parseWiktionarySection(lemma, svSection) {
   else if (/===Adjektiv===/i.test(svSection)) partOfSpeech = "adjective";
   else if (/===Adverb===/i.test(svSection)) partOfSpeech = "adverb";
 
-  // Determine en / ett article for Swedish nouns
   let article = "";
   if (partOfSpeech === "noun") {
-    if (/\{\{sv-subst-n/i.test(svSection) || /text=en\s+/i.test(svSection) || /\{\{u\}\}/i.test(svSection)) {
+    if (
+      /\{\{sv-subst-n/i.test(svSection) ||
+      /text=en\s+/i.test(svSection) ||
+      /\{\{u\}\}/i.test(svSection)
+    ) {
       article = "en";
-    } else if (/\{\{sv-subst-t/i.test(svSection) || /text=ett\s+/i.test(svSection) || /\{\{n\}\}/i.test(svSection)) {
+    } else if (
+      /\{\{sv-subst-t/i.test(svSection) ||
+      /text=ett\s+/i.test(svSection) ||
+      /\{\{n\}\}/i.test(svSection)
+    ) {
       article = "ett";
     }
   }
 
-  // Extract native human audio filename: ljud=sv-hund.ogg or ljud=Sv-hund.ogg
-  let audioFileName = null;
-  const audioMatch = svSection.match(/ljud\s*=\s*([^|}\n]+\.(?:ogg|mp3|wav|oga))/i);
+  let audioFileName: string | null = null;
+  const audioMatch = svSection.match(
+    /ljud\s*=\s*([^|}\n]+\.(?:ogg|mp3|wav|oga))/i
+  );
   if (audioMatch) {
     audioFileName = audioMatch[1].trim();
   }
 
-  // Resolve Wikimedia Commons direct URL if audioFileName exists
   let audioUrl = "";
   if (audioFileName) {
     audioUrl = await resolveWikimediaAudioUrl(audioFileName);
   } else {
-    // Also try standard Wikimedia naming convention File:Sv-<lemma>.ogg
     audioUrl = await resolveWikimediaAudioUrl(`Sv-${lemma.toLowerCase()}.ogg`);
   }
 
-  // Extract English translations from *engelska: {{ö+|en|dog}}
-  const englishTranslations = [];
+  const englishTranslations: string[] = [];
   const engLineMatch = svSection.match(/\*engelska:([^\n]+)/i);
   if (engLineMatch) {
     const matches = engLineMatch[1].matchAll(/\{\{ö\+?\s*\|en\|([^|}]+)/gi);
@@ -164,7 +216,6 @@ async function parseWiktionarySection(lemma, svSection) {
     }
   }
 
-  // Extract first Swedish definition line (# ...)
   let definitionSv = "";
   const defMatch = svSection.match(/\n#(?![:*])([^\n]+)/);
   if (defMatch) {
@@ -189,7 +240,7 @@ async function parseWiktionarySection(lemma, svSection) {
 /**
  * Resolve a Wikimedia Commons File:Sv-xxx.ogg to a playable URL
  */
-async function resolveWikimediaAudioUrl(fileName) {
+async function resolveWikimediaAudioUrl(fileName: string): Promise<string> {
   try {
     const cleanName = fileName.replace(/^File:/i, "").trim();
     const apiUrl = `https://commons.wikimedia.org/w/api.php?action=query&titles=File:${encodeURIComponent(
@@ -199,9 +250,8 @@ async function resolveWikimediaAudioUrl(fileName) {
     if (!res.ok) return "";
     const data = await res.json();
     const pages = data?.query?.pages || {};
-    const page = Object.values(pages)[0];
-    const url = page?.imageinfo?.[0]?.url || "";
-    return url;
+    const page: any = Object.values(pages)[0];
+    return page?.imageinfo?.[0]?.url || "";
   } catch {
     return "";
   }
@@ -210,13 +260,17 @@ async function resolveWikimediaAudioUrl(fileName) {
 /**
  * 2. Query Svenska.se (Svensk Ordbok - SO) for native Swedish Academy audio (isolve-so-service.appspot.com)
  */
-async function querySvenskaSeAudio(lemma) {
+async function querySvenskaSeAudio(lemma: string): Promise<string> {
   try {
-    const url = `https://svenska.se/tri/f_so.php?sok=${encodeURIComponent(lemma)}`;
+    const url = `https://svenska.se/tri/f_so.php?sok=${encodeURIComponent(
+      lemma
+    )}`;
     const res = await fetch(url);
     if (!res.ok) return "";
     const html = await res.text();
-    const mp3Match = html.match(/https:\/\/isolve-so-service\.appspot\.com\/pronounce\?id=\d+\.mp3/i);
+    const mp3Match = html.match(
+      /https:\/\/isolve-so-service\.appspot\.com\/pronounce\?id=\d+\.mp3/i
+    );
     if (mp3Match) {
       return mp3Match[0];
     }
@@ -229,8 +283,11 @@ async function querySvenskaSeAudio(lemma) {
 /**
  * 3. Query Google Translate Dictionary endpoint (zero-key) for translation, dictionary entries, and sentence translation
  */
-async function queryGoogleTranslateDictionary(word, contextSentence) {
-  const result = {
+async function queryGoogleTranslateDictionary(
+  word: string,
+  contextSentence: string
+): Promise<GoogleTranslateResult> {
+  const result: GoogleTranslateResult = {
     wordTranslation: "",
     sentenceTranslation: "",
     detectedLemma: "",
@@ -246,17 +303,15 @@ async function queryGoogleTranslateDictionary(word, contextSentence) {
     const res = await fetch(wordUrl);
     if (res.ok) {
       const data = await res.json();
-      // Primary translation
       result.wordTranslation = (data?.[0] || [])
-        .map((seg) => seg?.[0] || "")
+        .map((seg: any) => seg?.[0] || "")
         .join("")
         .trim();
 
-      // Dictionary breakdown (data[1])
       if (Array.isArray(data?.[1]) && data[1].length > 0) {
         const firstDict = data[1][0];
         result.partOfSpeech = firstDict?.[0] || "";
-        const terms = (firstDict?.[1] || []).slice(0, 4);
+        const terms: string[] = (firstDict?.[1] || []).slice(0, 4);
         if (terms.length > 0) {
           result.synonyms = terms;
         }
@@ -266,7 +321,11 @@ async function queryGoogleTranslateDictionary(word, contextSentence) {
       }
     }
 
-    if (contextSentence && contextSentence.trim() && contextSentence.trim() !== word.trim()) {
+    if (
+      contextSentence &&
+      contextSentence.trim() &&
+      contextSentence.trim() !== word.trim()
+    ) {
       const sentUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=sv&tl=en&dt=t&q=${encodeURIComponent(
         contextSentence
       )}`;
@@ -274,7 +333,7 @@ async function queryGoogleTranslateDictionary(word, contextSentence) {
       if (sentRes.ok) {
         const sentData = await sentRes.json();
         result.sentenceTranslation = (sentData?.[0] || [])
-          .map((seg) => seg?.[0] || "")
+          .map((seg: any) => seg?.[0] || "")
           .join("")
           .trim();
       }
@@ -287,21 +346,26 @@ async function queryGoogleTranslateDictionary(word, contextSentence) {
 
 /**
  * 4. Optional Gemini Flash enrichment (if user configures a free Gemini API key in Settings)
- *    Provides ultra-accurate Swedish de-inflection, en/ett gender, inflections table, and concrete visual search query.
  */
-async function queryGeminiFlash(word, contextSentence, apiKey) {
+async function queryGeminiFlash(
+  word: string,
+  contextSentence: string,
+  apiKey: string | undefined
+): Promise<GeminiEnrichmentResult | null> {
   if (!apiKey || !apiKey.trim()) return null;
   try {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
       apiKey.trim()
     )}`;
     const prompt = `You are a Swedish linguistics and vocabulary expert.
-Analyze the highlighted Swedish word "${word}" from the context sentence: "${contextSentence || word}".
+Analyze the highlighted Swedish word or partikelverb "${word}" from the context sentence: "${
+      contextSentence || word
+    }".
 Return ONLY a JSON object with these keys:
-- "lemma": dictionary base form in Swedish without article (e.g. "tågstation", "springa", "stor")
+- "lemma": dictionary base form in Swedish without article (e.g. "tågstation", "hålla till", "stor")
 - "article": "en" or "ett" if noun, otherwise ""
-- "partOfSpeech": "noun", "verb", "adjective", "adverb", or "phrase"
-- "inflections": standard Swedish inflection forms (e.g. "en tågstation, tågstationen, tågstationer, tågstationerna")
+- "partOfSpeech": "noun", "verb", "partikelverb", "adjective", "adverb", or "phrase"
+- "inflections": standard Swedish inflection forms
 - "lemmaTranslation": concise English translation of the base word
 - "contextualTranslation": English meaning of "${word}" in this specific sentence
 - "sentenceTranslation": natural English translation of the context sentence
@@ -319,7 +383,7 @@ Return ONLY a JSON object with these keys:
     const data = await res.json();
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) return null;
-    return JSON.parse(text);
+    return JSON.parse(text) as GeminiEnrichmentResult;
   } catch (e) {
     console.warn("Gemini enrichment error:", e);
     return null;
@@ -328,12 +392,10 @@ Return ONLY a JSON object with these keys:
 
 /**
  * 5. Fetch First Image from Google Image Search
- *    Runs a Google Images query and extracts the top image thumbnails so the 1st result is selected automatically.
  */
-async function fetchGoogleImages(query) {
-  const images = [];
+async function fetchGoogleImages(query: string): Promise<string[]> {
+  const images: string[] = [];
   try {
-    // Query Google Images directly using extension host_permissions
     const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(
       query
     )}&tbm=isch&hl=sv&safe=active`;
@@ -346,22 +408,28 @@ async function fetchGoogleImages(query) {
     if (res.ok) {
       const html = await res.text();
 
-      // 1. Extract high-res HTTP image URLs embedded in Google Images script blocks
-      const fullImgMatches = html.matchAll(/\["(https:\/\/[^"]+\.(?:jpg|jpeg|png|webp))",\d+,\d+\]/gi);
+      const fullImgMatches = html.matchAll(
+        /\["(https:\/\/[^"]+\.(?:jpg|jpeg|png|webp))",\d+,\d+\]/gi
+      );
       for (const m of fullImgMatches) {
         const url = m[1].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-        if (!url.includes("gstatic.com") && !url.includes("google.com") && !images.includes(url)) {
+        if (
+          !url.includes("gstatic.com") &&
+          !url.includes("google.com") &&
+          !images.includes(url)
+        ) {
           images.push(url);
           if (images.length >= 6) break;
         }
       }
 
-      // 2. Also extract reliable encrypted-tbn0.gstatic.com thumbnails (never blocked by hotlink protection)
-      const tbnMatches = html.matchAll(/https:\/\/encrypted-tbn0\.gstatic\.com\/images\?q=tbn:[^"'\s\\&]+/gi);
+      const tbnMatches = html.matchAll(
+        /https:\/\/encrypted-tbn0\.gstatic\.com\/images\?q=tbn:[^"'\s\\&]+/gi
+      );
       for (const m of tbnMatches) {
         const url = m[0].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
         if (!images.includes(url)) {
-          images.unshift(url); // Prefer gstatic thumbnail first because it loads fast and never 403s
+          images.unshift(url);
           if (images.length >= 8) break;
         }
       }
@@ -370,7 +438,6 @@ async function fetchGoogleImages(query) {
     console.warn("Google Images fetch error:", e);
   }
 
-  // Fallback to Wikimedia Commons image search if Google Images returned nothing
   if (images.length === 0) {
     try {
       const wikiUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=filetype:bitmap+${encodeURIComponent(
@@ -379,7 +446,7 @@ async function fetchGoogleImages(query) {
       const res = await fetch(wikiUrl);
       if (res.ok) {
         const data = await res.json();
-        const pages = Object.values(data?.query?.pages || {});
+        const pages: any[] = Object.values(data?.query?.pages || {});
         for (const p of pages) {
           const thumb = p?.imageinfo?.[0]?.thumburl || p?.imageinfo?.[0]?.url;
           if (thumb) images.push(thumb);
@@ -394,17 +461,15 @@ async function fetchGoogleImages(query) {
 }
 
 /**
- * Convert an audio URL into a compact Base64 Data URL (~12KB) so it plays without CORS/CSP issues
- * and works offline in Cloud Firestore & on the Android App.
+ * Convert an audio URL into a compact Base64 Data URL (~12KB)
  */
-async function fetchAudioAsBase64(audioUrl) {
+async function fetchAudioAsBase64(audioUrl: string): Promise<string> {
   if (!audioUrl) return "";
   try {
     const res = await fetch(audioUrl);
     if (!res.ok) return "";
     const buf = await res.arrayBuffer();
     if (buf.byteLength > 350 * 1024) {
-      // Skip base64 encoding if audio is unexpectedly huge (>350KB) to keep Firestore doc small
       return "";
     }
     const bytes = new Uint8Array(buf);
@@ -420,13 +485,14 @@ async function fetchAudioAsBase64(audioUrl) {
 }
 
 /**
- * Master pipeline: Enrich a selected Swedish word with:
- * - Swedish Dictionary lookup (Wiktionary + Svenska.se SO)
- * - English translation + Context translation (Google Translate + optional Gemini Flash)
- * - Native human voice recording (with TTS fallback)
- * - First Google Image search result
+ * Master pipeline: Enrich a selected Swedish word
  */
-async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitle }) {
+async function analyzeSwedishWord({
+  word,
+  contextSentence,
+  sourceUrl,
+  sourceTitle
+}: AnalyzeWordRequest): Promise<EnrichmentPayload> {
   const cleaned = cleanWord(word);
   if (!cleaned) {
     throw new Error("No valid Swedish word selected.");
@@ -434,7 +500,6 @@ async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitl
 
   const settings = await getSettings();
 
-  // Run Wiktionary lookup, Google Translate lookup, and (optional) Gemini Flash in parallel
   const [wikiData, gTrans, geminiData] = await Promise.all([
     querySwedishWiktionary(cleaned),
     queryGoogleTranslateDictionary(cleaned, contextSentence),
@@ -447,13 +512,12 @@ async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitl
     gTrans?.detectedLemma ||
     cleaned.toLowerCase();
 
-  // If Gemini or gTrans resolved a different base lemma than the surface word, check Wiktionary for that lemma too
   let finalWiki = wikiData;
   if (!finalWiki && lemma.toLowerCase() !== cleaned.toLowerCase()) {
     finalWiki = await parseWiktionarySwedishEntry(lemma);
   }
 
-  let baseGTrans = null;
+  let baseGTrans: GoogleTranslateResult | null = null;
   if (
     lemma.toLowerCase() !== cleaned.toLowerCase() &&
     !geminiData?.lemmaTranslation &&
@@ -472,7 +536,9 @@ async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitl
   const lemmaTranslation =
     geminiData?.lemmaTranslation ||
     finalWiki?.englishFromWiktionary ||
-    (baseGTrans?.synonyms?.length ? baseGTrans.synonyms.slice(0, 3).join(", ") : "") ||
+    (baseGTrans?.synonyms?.length
+      ? baseGTrans.synonyms.slice(0, 3).join(", ")
+      : "") ||
     baseGTrans?.wordTranslation ||
     (gTrans?.synonyms?.length ? gTrans.synonyms.slice(0, 3).join(", ") : "") ||
     gTrans?.wordTranslation ||
@@ -486,7 +552,6 @@ async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitl
   const sentenceTranslation =
     geminiData?.sentenceTranslation || gTrans?.sentenceTranslation || "";
 
-  // Resolve Swedish Audio (Priority: 1. Wiktionary human audio, 2. Svenska.se SO human audio, 3. Swedish pronunciation TTS fallback)
   let audioUrl = finalWiki?.audioUrl || "";
   let audioSource = finalWiki?.audioSource || "";
 
@@ -506,8 +571,9 @@ async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitl
     audioSource = "Swedish Pronunciation TTS (Fallback)";
   }
 
-  // Fetch audio Base64 and Google Images in parallel
-  const imageQuery = geminiData?.imageSearchQuery || `${lemma} ${lemmaTranslation.split(",")[0] || ""}`.trim();
+  const imageQuery =
+    geminiData?.imageSearchQuery ||
+    `${lemma} ${lemmaTranslation.split(",")[0] || ""}`.trim();
   const [audioBase64, images] = await Promise.all([
     fetchAudioAsBase64(audioUrl),
     fetchGoogleImages(imageQuery)
@@ -540,7 +606,6 @@ async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitl
   };
 }
 
-// Create right-click context menu item for quick lookup
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "svenska-spaced-lookup",
@@ -558,52 +623,53 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 });
 
-// Handle messages from content script and popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  (async () => {
-    try {
-      switch (message.type) {
-        case "ANALYZE_WORD": {
-          const result = await analyzeSwedishWord(message.payload);
-          sendResponse({ ok: true, data: result });
-          break;
+chrome.runtime.onMessage.addListener(
+  (message: ExtensionMessage, _sender, sendResponse) => {
+    (async () => {
+      try {
+        switch (message.type) {
+          case "ANALYZE_WORD": {
+            const result = await analyzeSwedishWord(message.payload);
+            sendResponse({ ok: true, data: result });
+            break;
+          }
+          case "SAVE_CARD": {
+            const saved = await saveCardToStorage(message.payload);
+            sendResponse({ ok: true, data: saved });
+            break;
+          }
+          case "GET_CARDS": {
+            const cards = await getAllCards();
+            sendResponse({ ok: true, data: cards });
+            break;
+          }
+          case "DELETE_CARD": {
+            const remaining = await deleteCard(message.cardId);
+            sendResponse({ ok: true, data: remaining });
+            break;
+          }
+          case "GET_SETTINGS": {
+            const settings = await getSettings();
+            sendResponse({ ok: true, data: settings });
+            break;
+          }
+          case "SAVE_SETTINGS": {
+            const updated = await saveSettings(message.payload);
+            sendResponse({ ok: true, data: updated });
+            break;
+          }
+          case "SYNC_ALL": {
+            const count = await syncAllLocalToCloud();
+            sendResponse({ ok: true, count });
+            break;
+          }
+          default:
+            sendResponse({ ok: false, error: "Unknown message type" });
         }
-        case "SAVE_CARD": {
-          const saved = await saveCardToStorage(message.payload);
-          sendResponse({ ok: true, data: saved });
-          break;
-        }
-        case "GET_CARDS": {
-          const cards = await getAllCards();
-          sendResponse({ ok: true, data: cards });
-          break;
-        }
-        case "DELETE_CARD": {
-          const remaining = await deleteCard(message.cardId);
-          sendResponse({ ok: true, data: remaining });
-          break;
-        }
-        case "GET_SETTINGS": {
-          const settings = await getSettings();
-          sendResponse({ ok: true, data: settings });
-          break;
-        }
-        case "SAVE_SETTINGS": {
-          const updated = await saveSettings(message.payload);
-          sendResponse({ ok: true, data: updated });
-          break;
-        }
-        case "SYNC_ALL": {
-          const count = await syncAllLocalToCloud();
-          sendResponse({ ok: true, count });
-          break;
-        }
-        default:
-          sendResponse({ ok: false, error: "Unknown message type" });
+      } catch (err: any) {
+        sendResponse({ ok: false, error: err?.message || String(err) });
       }
-    } catch (err) {
-      sendResponse({ ok: false, error: err.message || String(err) });
-    }
-  })();
-  return true; // Keep message channel open for async response
-});
+    })();
+    return true;
+  }
+);
