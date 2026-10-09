@@ -1,0 +1,18 @@
+# Compiled TypeScript output
+dist/
+chrome-extension/dist/
+
+# Dependencies
+node_modules/
+
+# Expo / React Native
+.expo/
+.expo-shared/
+android-app/.expo/
+web-build/
+
+# OS & Editor files
+.DS_Store
+*.log
+.env
+.env.local

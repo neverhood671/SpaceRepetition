@@ -30,8 +30,25 @@ export interface FirestoreDocument {
   fields?: Record<string, FirestoreValue>;
 }
 
+const memoryStore: Record<string, any> = {};
+
+async function storageGet(key: string): Promise<Record<string, any>> {
+  if (typeof chrome !== "undefined" && chrome.storage?.local) {
+    return await chrome.storage.local.get(key);
+  }
+  return { [key]: memoryStore[key] };
+}
+
+async function storageSet(items: Record<string, any>): Promise<void> {
+  if (typeof chrome !== "undefined" && chrome.storage?.local) {
+    await chrome.storage.local.set(items);
+    return;
+  }
+  Object.assign(memoryStore, items);
+}
+
 export async function getSettings(): Promise<ExtensionSettings> {
-  const data = await chrome.storage.local.get(SETTINGS_KEY);
+  const data = await storageGet(SETTINGS_KEY);
   return {
     firebaseProjectId: "",
     firebaseApiKey: "",
@@ -46,7 +63,7 @@ export async function saveSettings(
 ): Promise<ExtensionSettings> {
   const current = await getSettings();
   const merged: ExtensionSettings = { ...current, ...newSettings };
-  await chrome.storage.local.set({ [SETTINGS_KEY]: merged });
+  await storageSet({ [SETTINGS_KEY]: merged });
   return merged;
 }
 
@@ -185,7 +202,77 @@ export function createCardObject(enrichment: EnrichmentPayload): VocabCard {
 }
 
 /**
- * Save card to local storage and (if configured) Firebase Cloud Firestore
+ * Check whether an existing saved card matches a Swedish lemma/article/surfaceForm
+ * (handles verbs with or without "att " prefix)
+ */
+export function isSameSwedishWord(
+  card: VocabCard,
+  lemma: string,
+  article = "",
+  surfaceForm = ""
+): boolean {
+  const normLemma = (lemma || "").trim().toLowerCase();
+  const bareLemma = normLemma.replace(/^att\s+/i, "").trim();
+  const normSurface = (surfaceForm || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^att\s+/i, "")
+    .trim();
+
+  const cardLemma = (card.swedish?.lemma || "").trim().toLowerCase();
+  const cardBareLemma = cardLemma.replace(/^att\s+/i, "").trim();
+  const cardSurface = (card.swedish?.surfaceForm || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^att\s+/i, "")
+    .trim();
+
+  const cardArticle = (card.swedish?.article || "").trim().toLowerCase();
+  const targetArticle = (article || "").trim().toLowerCase();
+  if (cardArticle && targetArticle && cardArticle !== targetArticle) {
+    return false;
+  }
+
+  if (bareLemma && cardBareLemma === bareLemma) {
+    return true;
+  }
+  if (normSurface && (cardBareLemma === normSurface || cardSurface === normSurface)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Find an existing saved card matching the given Swedish lemma / surface form
+ */
+export async function findExistingCard(
+  lemma: string,
+  article = "",
+  surfaceForm = ""
+): Promise<VocabCard | null> {
+  const store = await storageGet(LOCAL_CARDS_KEY);
+  let cards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
+
+  if (cards.length === 0) {
+    const settings = await getSettings();
+    if (settings.firebaseProjectId && settings.firebaseProjectId.trim()) {
+      try {
+        cards = await getAllCards();
+      } catch {
+        // Ignore network errors
+      }
+    }
+  }
+
+  const found = cards.find((c) =>
+    isSameSwedishWord(c, lemma, article, surfaceForm)
+  );
+  return found || null;
+}
+
+/**
+ * Save card to local storage and (if configured) Firebase Cloud Firestore.
+ * If the word is already saved, do NOT save it a second time.
  */
 export async function saveCardToStorage(
   enrichmentData: EnrichmentPayload
@@ -193,24 +280,31 @@ export async function saveCardToStorage(
   const card = createCardObject(enrichmentData);
   const settings = await getSettings();
 
-  // 1. Save to local Chrome storage
-  const store = await chrome.storage.local.get(LOCAL_CARDS_KEY);
+  const store = await storageGet(LOCAL_CARDS_KEY);
   const cards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
-  const existingIdx = cards.findIndex(
-    (c) =>
-      c.swedish?.lemma?.toLowerCase() === card.swedish.lemma.toLowerCase() &&
-      c.swedish?.article === card.swedish.article
+  const existingIdx = cards.findIndex((c) =>
+    isSameSwedishWord(
+      c,
+      card.swedish.lemma,
+      card.swedish.article,
+      card.swedish.surfaceForm
+    )
   );
-  if (existingIdx >= 0) {
-    card.id = cards[existingIdx].id;
-    card.fsrs = cards[existingIdx].fsrs || card.fsrs;
-    cards[existingIdx] = card;
-  } else {
-    cards.unshift(card);
-  }
-  await chrome.storage.local.set({ [LOCAL_CARDS_KEY]: cards });
 
-  // 2. Sync to Firebase Cloud Firestore if firebaseProjectId is set
+  // Do NOT save a second time if the word already exists in the deck
+  if (existingIdx >= 0) {
+    return {
+      card: cards[existingIdx],
+      cloudSynced: false,
+      cloudError: null,
+      alreadyExisted: true
+    };
+  }
+
+  cards.unshift(card);
+  await storageSet({ [LOCAL_CARDS_KEY]: cards });
+
+  // Sync to Firebase Cloud Firestore if firebaseProjectId is set
   let cloudSynced = false;
   let cloudError: string | null = null;
   if (settings.firebaseProjectId && settings.firebaseProjectId.trim()) {
@@ -223,7 +317,7 @@ export async function saveCardToStorage(
     }
   }
 
-  return { card, cloudSynced, cloudError };
+  return { card, cloudSynced, cloudError, alreadyExisted: false };
 }
 
 export async function pushCardToFirestore(
@@ -278,7 +372,7 @@ export async function fetchCardsFromFirestore(
 
 export async function getAllCards(): Promise<VocabCard[]> {
   const settings = await getSettings();
-  const store = await chrome.storage.local.get(LOCAL_CARDS_KEY);
+  const store = await storageGet(LOCAL_CARDS_KEY);
   const localCards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
 
   if (settings.firebaseProjectId && settings.firebaseProjectId.trim()) {
@@ -290,7 +384,7 @@ export async function getAllCards(): Promise<VocabCard[]> {
       const merged = Array.from(map.values()).sort((a, b) =>
         (b.createdAt || "").localeCompare(a.createdAt || "")
       );
-      await chrome.storage.local.set({ [LOCAL_CARDS_KEY]: merged });
+      await storageSet({ [LOCAL_CARDS_KEY]: merged });
       return merged;
     } catch (e) {
       console.warn("Falling back to local cards:", e);
@@ -301,11 +395,11 @@ export async function getAllCards(): Promise<VocabCard[]> {
 
 export async function deleteCard(cardId: string): Promise<VocabCard[]> {
   const settings = await getSettings();
-  const store = await chrome.storage.local.get(LOCAL_CARDS_KEY);
+  const store = await storageGet(LOCAL_CARDS_KEY);
   const localCards: VocabCard[] = (store[LOCAL_CARDS_KEY] || []).filter(
     (c: VocabCard) => c.id !== cardId
   );
-  await chrome.storage.local.set({ [LOCAL_CARDS_KEY]: localCards });
+  await storageSet({ [LOCAL_CARDS_KEY]: localCards });
 
   if (settings.firebaseProjectId && settings.firebaseProjectId.trim()) {
     const projectId = settings.firebaseProjectId.trim();
@@ -325,7 +419,7 @@ export async function syncAllLocalToCloud(): Promise<number> {
   if (!settings.firebaseProjectId?.trim()) {
     throw new Error("Please configure your Firebase Project ID first.");
   }
-  const store = await chrome.storage.local.get(LOCAL_CARDS_KEY);
+  const store = await storageGet(LOCAL_CARDS_KEY);
   const localCards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
   let syncedCount = 0;
   for (const card of localCards) {

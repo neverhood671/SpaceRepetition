@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "test": "tsc && node dist/tests/main.test.js"
   },
   "devDependencies": {
     "typescript": "^4.9.5"

@@ -56,6 +56,8 @@ export interface EnrichmentPayload {
   id?: string;
   sourceUrl?: string;
   sourceTitle?: string;
+  alreadySaved?: boolean;
+  existingCardId?: string;
   swedish: Partial<SwedishWordInfo> & { surfaceForm: string; lemma: string };
   english: Partial<EnglishTranslationInfo>;
   media: Partial<CardMediaInfo>;
@@ -72,6 +74,7 @@ export interface SaveCardResult {
   card: VocabCard;
   cloudSynced: boolean;
   cloudError: string | null;
+  alreadyExisted?: boolean;
 }
 
 export type ExtensionMessage =

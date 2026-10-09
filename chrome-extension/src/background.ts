@@ -2,6 +2,7 @@ import {
   getSettings,
   saveSettings,
   saveCardToStorage,
+  findExistingCard,
   getAllCards,
   deleteCard,
   syncAllLocalToCloud
@@ -12,7 +13,7 @@ import {
   ExtensionMessage
 } from "./types.js";
 
-interface WiktionaryParseResult {
+export interface WiktionaryParseResult {
   lemma: string;
   article: string;
   partOfSpeech: string;
@@ -45,7 +46,7 @@ interface GeminiEnrichmentResult {
 /**
  * Clean selected text to a Swedish word or short phrase
  */
-function cleanWord(raw: string | undefined): string {
+export function cleanWord(raw: string | undefined): string {
   return (raw || "")
     .trim()
     .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
@@ -60,10 +61,13 @@ function cleanWord(raw: string | undefined): string {
  *    - Native human audio filename (ljud=Sv-xxx.ogg)
  *    - Swedish definition & English translations ({{ö+|en|...}})
  */
-async function querySwedishWiktionary(
+export async function querySwedishWiktionary(
   word: string
 ): Promise<WiktionaryParseResult | null> {
-  const candidates = [word, word.toLowerCase()];
+  const stripped = word.replace(/^att\s+/i, "").trim();
+  const candidates = Array.from(
+    new Set([ stripped, stripped.toLowerCase(), word, word.toLowerCase() ])
+  ).filter(Boolean);
   for (const candidate of candidates) {
     try {
       const url = `https://sv.wiktionary.org/w/api.php?action=query&titles=${encodeURIComponent(
@@ -81,18 +85,27 @@ async function querySwedishWiktionary(
       const svSection =
         wikitext.split("==Svenska==")[1]?.split(/\n==[^=]/)[0] || wikitext;
 
-      // Check if this entry is an inflection of a base lemma: {{böjning|sv|subst|hund}}
+      // Check if this entry is an inflection of a base lemma: {{böjning|sv|subst|hund}} or {{böjning|sv|verb|segra}}
       const inflectionMatch = svSection.match(
         /\{\{böjning\|sv\|([^|}]+)\|([^|}]+)/i
       );
       if (inflectionMatch && inflectionMatch[2]) {
+        const inflectedPos = inflectionMatch[1].trim().toLowerCase();
         const baseLemma = inflectionMatch[2].trim();
         if (baseLemma.toLowerCase() !== candidate.toLowerCase()) {
           const baseResult = await parseWiktionarySwedishEntry(baseLemma);
           if (baseResult) {
             return {
               ...baseResult,
-              lemma: baseLemma
+              lemma: baseLemma,
+              partOfSpeech:
+                baseResult.partOfSpeech !== "word"
+                  ? baseResult.partOfSpeech
+                  : inflectedPos === "verb"
+                  ? "verb"
+                  : inflectedPos === "subst"
+                  ? "noun"
+                  : baseResult.partOfSpeech
             };
           }
         }
@@ -162,7 +175,7 @@ async function parseWiktionarySwedishEntry(
   }
 }
 
-async function parseWiktionarySection(
+export async function parseWiktionarySection(
   lemma: string,
   svSection: string
 ): Promise<WiktionaryParseResult> {
@@ -391,15 +404,107 @@ Return ONLY a JSON object with these keys:
 }
 
 /**
- * 5. Fetch First Image from Google Image Search
+ * Extract image URLs from Bing Images async HTML or Google Images HTML
  */
-async function fetchGoogleImages(query: string): Promise<string[]> {
+export function extractImagesFromHtml(html: string): string[] {
   const images: string[] = [];
+  const normalized = (html || "")
+    .replace(/\\u003d/gi, "=")
+    .replace(/\\u0026/gi, "&")
+    .replace(/&amp;/gi, "&");
+
+  const pushUnique = (rawUrl: string) => {
+    const cleaned = rawUrl.replace(/&quot;.*$/i, "").trim();
+    if (cleaned.startsWith("https://") && !images.includes(cleaned)) {
+      images.push(cleaned);
+    }
+  };
+
+  // 1. Bing Images async thumbnail URLs (turl&quot;:&quot;https://...&quot;)
+  const bingTurlMatches = normalized.matchAll(
+    /turl(?:&quot;|"):\s*(?:&quot;|")(https:\/\/[^"'<>\\\s]+?)(?:&quot;|")/gi
+  );
+  for (const m of bingTurlMatches) {
+    pushUnique(m[1]);
+    if (images.length >= 8) return images;
+  }
+
+  // 2. Direct Bing OIP thumbnail URLs (th.bing.com / tse*.mm.bing.net)
+  const bingOipMatches = normalized.matchAll(
+    /https:\/\/(?:th\.bing\.com|tse\d+\.mm\.bing\.net)\/th(?:\?id=|\/id\/)OIP\.[^"'<>\\\s]+/gi
+  );
+  for (const m of bingOipMatches) {
+    pushUnique(m[0]);
+    if (images.length >= 8) return images;
+  }
+
+  // 3. Bing murl full image URLs
+  const bingMurlMatches = normalized.matchAll(
+    /murl(?:&quot;|"):\s*(?:&quot;|")(https:\/\/[^"'<>\\\s]+\.(?:jpg|jpeg|png|webp))(?=&quot;|")/gi
+  );
+  for (const m of bingMurlMatches) {
+    pushUnique(m[1]);
+    if (images.length >= 8) return images;
+  }
+
+  // 4. Google Images encrypted-tbn0 thumbnails
+  const tbnMatches = normalized.matchAll(
+    /https:\/\/encrypted-tbn0\.gstatic\.com\/images\?q=tbn:[^"'\s\\<>]+/gi
+  );
+  for (const m of tbnMatches) {
+    pushUnique(m[0]);
+    if (images.length >= 8) return images;
+  }
+
+  // 5. Google Images direct URLs
+  const fullImgMatches = normalized.matchAll(
+    /\["(https:\/\/[^"]+\.(?:jpg|jpeg|png|webp))",\d+,\d+\]/gi
+  );
+  for (const m of fullImgMatches) {
+    const candidate = m[1];
+    if (!candidate.includes("gstatic.com") && !candidate.includes("google.com")) {
+      pushUnique(candidate);
+      if (images.length >= 8) return images;
+    }
+  }
+
+  return images;
+}
+
+/**
+ * 5. Fetch Images for a Swedish Word using:
+ *    - Bing Images async endpoint (static HTML thumbnails, no JS redirect gate)
+ *    - Google Images search endpoint
+ *    - Wikipedia PageImages API & Wikimedia Commons API (single-language queries)
+ */
+export async function fetchGoogleImages(
+  query: string,
+  fallbackQueries: string[] = []
+): Promise<string[]> {
+  const images: string[] = [];
+  const pushUnique = (url: string) => {
+    if (url && url.startsWith("https://") && !images.includes(url)) {
+      images.push(url);
+    }
+  };
+
+  const searchTerms = Array.from(
+    new Set(
+      [query, ...fallbackQueries]
+        .map((q) => (q || "").replace(/^att\s+/i, "").trim())
+        .filter(Boolean)
+    )
+  );
+  if (searchTerms.length === 0) return images;
+
+  const primaryQuery = searchTerms[0];
+
+  // A. Query Bing Images async endpoint (fast static HTML with high-reliability thumbnails)
   try {
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(
-      query
-    )}&tbm=isch&hl=sv&safe=active`;
-    const res = await fetch(searchUrl, {
+    const bingUrl = `https://www.bing.com/images/async?q=${encodeURIComponent(
+      primaryQuery
+    )}&first=1&count=8&adlt=strict`;
+    const res = await fetch(bingUrl, {
       headers: {
         Accept: "text/html,application/xhtml+xml",
         "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7"
@@ -407,57 +512,109 @@ async function fetchGoogleImages(query: string): Promise<string[]> {
     });
     if (res.ok) {
       const html = await res.text();
-
-      const fullImgMatches = html.matchAll(
-        /\["(https:\/\/[^"]+\.(?:jpg|jpeg|png|webp))",\d+,\d+\]/gi
-      );
-      for (const m of fullImgMatches) {
-        const url = m[1].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-        if (
-          !url.includes("gstatic.com") &&
-          !url.includes("google.com") &&
-          !images.includes(url)
-        ) {
-          images.push(url);
-          if (images.length >= 6) break;
-        }
-      }
-
-      const tbnMatches = html.matchAll(
-        /https:\/\/encrypted-tbn0\.gstatic\.com\/images\?q=tbn:[^"'\s\\&]+/gi
-      );
-      for (const m of tbnMatches) {
-        const url = m[0].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-        if (!images.includes(url)) {
-          images.unshift(url);
-          if (images.length >= 8) break;
-        }
+      for (const img of extractImagesFromHtml(html)) {
+        pushUnique(img);
       }
     }
   } catch (e) {
-    console.warn("Google Images fetch error:", e);
+    console.warn("Bing Images fetch error:", e);
   }
 
-  if (images.length === 0) {
+  // B. Query Google Images endpoint if still needed
+  if (images.length < 2) {
     try {
-      const wikiUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=filetype:bitmap+${encodeURIComponent(
-        query
-      )}&gsrlimit=4&prop=imageinfo&iiprop=url&iiurlwidth=400&format=json&origin=*`;
-      const res = await fetch(wikiUrl);
+      const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(
+        primaryQuery
+      )}&tbm=isch&hl=sv&safe=active`;
+      const res = await fetch(searchUrl, {
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7"
+        }
+      });
       if (res.ok) {
-        const data = await res.json();
-        const pages: any[] = Object.values(data?.query?.pages || {});
-        for (const p of pages) {
-          const thumb = p?.imageinfo?.[0]?.thumburl || p?.imageinfo?.[0]?.url;
-          if (thumb) images.push(thumb);
+        const html = await res.text();
+        for (const img of extractImagesFromHtml(html)) {
+          pushUnique(img);
         }
       }
-    } catch {
-      // Ignore fallback error
+    } catch (e) {
+      console.warn("Google Images fetch error:", e);
     }
   }
 
-  return images;
+  // C. Query Wikipedia pageimages & Wikimedia Commons using clean single-language terms
+  if (images.length < 3) {
+    for (const term of searchTerms) {
+      if (images.length >= 6) break;
+      try {
+        const wikiPageImgUrl = `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
+          term
+        )}&gsrlimit=4&prop=pageimages&piprop=thumbnail&pithumbsize=500&format=json&origin=*`;
+        const wpRes = await fetch(wikiPageImgUrl);
+        if (wpRes.ok) {
+          const wpData = await wpRes.json();
+          const pages: any[] = Object.values(wpData?.query?.pages || {});
+          for (const p of pages) {
+            if (p?.thumbnail?.source) {
+              pushUnique(p.thumbnail.source);
+            }
+          }
+        }
+      } catch {
+        // Ignore Wikipedia error
+      }
+
+      if (images.length >= 6) break;
+
+      try {
+        const commonsUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=filetype:bitmap+${encodeURIComponent(
+          term
+        )}&gsrlimit=4&prop=imageinfo&iiprop=url&iiurlwidth=400&format=json&origin=*`;
+        const res = await fetch(commonsUrl);
+        if (res.ok) {
+          const data = await res.json();
+          const pages: any[] = Object.values(data?.query?.pages || {});
+          for (const p of pages) {
+            const thumb = p?.imageinfo?.[0]?.thumburl || p?.imageinfo?.[0]?.url;
+            if (thumb) pushUnique(thumb);
+          }
+        }
+      } catch {
+        // Ignore Wikimedia Commons error
+      }
+    }
+  }
+
+  return images.slice(0, 8);
+}
+
+/**
+ * Convert an image URL into a Base64 Data URL in the Service Worker
+ * so strict host webpage CSPs (like svtplay.se img-src) never block rendering
+ */
+export async function fetchImageAsBase64(imageUrl: string): Promise<string> {
+  if (!imageUrl || imageUrl.startsWith("data:")) return imageUrl || "";
+  try {
+    const res = await fetch(imageUrl);
+    if (!res.ok) return "";
+    const contentType = res.headers?.get?.("content-type") || "";
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      return "";
+    }
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength === 0 || buf.byteLength > 220 * 1024) {
+      return "";
+    }
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return `data:${contentType.split(";")[0]};base64,${btoa(binary)}`;
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -477,7 +634,7 @@ async function fetchAudioAsBase64(audioUrl: string): Promise<string> {
     for (let i = 0; i < bytes.byteLength; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
-    const contentType = res.headers.get("content-type") || "audio/mpeg";
+    const contentType = res.headers?.get?.("content-type") || "audio/mpeg";
     return `data:${contentType};base64,${btoa(binary)}`;
   } catch {
     return "";
@@ -487,7 +644,7 @@ async function fetchAudioAsBase64(audioUrl: string): Promise<string> {
 /**
  * Master pipeline: Enrich a selected Swedish word
  */
-async function analyzeSwedishWord({
+export async function analyzeSwedishWord({
   word,
   contextSentence,
   sourceUrl,
@@ -506,32 +663,37 @@ async function analyzeSwedishWord({
     queryGeminiFlash(cleaned, contextSentence, settings.geminiApiKey)
   ]);
 
-  const lemma =
+  const rawLemma =
     geminiData?.lemma ||
     wikiData?.lemma ||
     gTrans?.detectedLemma ||
     cleaned.toLowerCase();
 
+  const bareLemma = rawLemma.replace(/^att\s+/i, "").trim();
+
   let finalWiki = wikiData;
-  if (!finalWiki && lemma.toLowerCase() !== cleaned.toLowerCase()) {
-    finalWiki = await parseWiktionarySwedishEntry(lemma);
+  if (!finalWiki && bareLemma.toLowerCase() !== cleaned.toLowerCase()) {
+    finalWiki = await parseWiktionarySwedishEntry(bareLemma);
   }
 
   let baseGTrans: GoogleTranslateResult | null = null;
   if (
-    lemma.toLowerCase() !== cleaned.toLowerCase() &&
+    bareLemma.toLowerCase() !== cleaned.toLowerCase() &&
     !geminiData?.lemmaTranslation &&
     !finalWiki?.englishFromWiktionary
   ) {
-    baseGTrans = await queryGoogleTranslateDictionary(lemma, "");
+    baseGTrans = await queryGoogleTranslateDictionary(bareLemma, "");
   }
 
-  const article = geminiData?.article || finalWiki?.article || "";
   const partOfSpeech =
     geminiData?.partOfSpeech ||
     finalWiki?.partOfSpeech ||
     gTrans?.partOfSpeech ||
-    "word";
+    (/^att\s+/i.test(cleaned) ? "verb" : "word");
+
+  const isVerb = /verb/i.test(partOfSpeech) || /^att\s+/i.test(rawLemma);
+  const article = isVerb ? "" : geminiData?.article || finalWiki?.article || "";
+  const formattedLemma = isVerb ? `att ${bareLemma}` : bareLemma;
 
   const lemmaTranslation =
     geminiData?.lemmaTranslation ||
@@ -556,7 +718,7 @@ async function analyzeSwedishWord({
   let audioSource = finalWiki?.audioSource || "";
 
   if (!audioUrl) {
-    const soAudio = await querySvenskaSeAudio(lemma);
+    const soAudio = await querySvenskaSeAudio(bareLemma);
     if (soAudio) {
       audioUrl = soAudio;
       audioSource = "Svenska.se SO (Native Dictionary)";
@@ -564,27 +726,50 @@ async function analyzeSwedishWord({
   }
 
   if (!audioUrl) {
-    const spokenText = article ? `${article} ${lemma}` : lemma;
+    const spokenText = article ? `${article} ${formattedLemma}` : formattedLemma;
     audioUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=sv&client=tw-ob&q=${encodeURIComponent(
       spokenText
     )}`;
     audioSource = "Swedish Pronunciation TTS (Fallback)";
   }
 
-  const imageQuery =
-    geminiData?.imageSearchQuery ||
-    `${lemma} ${lemmaTranslation.split(",")[0] || ""}`.trim();
-  const [audioBase64, images] = await Promise.all([
+  const englishPrimary = (
+    lemmaTranslation.split(",")[0] ||
+    contextualTranslation.split(",")[0] ||
+    ""
+  )
+    .replace(/^to\s+/i, "")
+    .trim();
+
+  const primaryImageQuery =
+    geminiData?.imageSearchQuery || englishPrimary || bareLemma;
+  const fallbackImageQueries = [bareLemma, englishPrimary].filter(Boolean);
+
+  const [audioBase64, rawImages, existingCard] = await Promise.all([
     fetchAudioAsBase64(audioUrl),
-    fetchGoogleImages(imageQuery)
+    fetchGoogleImages(primaryImageQuery, fallbackImageQueries),
+    findExistingCard(formattedLemma, article, cleaned)
   ]);
+
+  // Convert first image to a CSP-safe data URL if possible, while keeping alternatives
+  const images = [...rawImages];
+  if (images.length > 0) {
+    const firstBase64 = await fetchImageAsBase64(images[0]);
+    if (firstBase64) {
+      images[0] = firstBase64;
+    }
+  } else if (existingCard?.media?.imageUrl) {
+    images.push(existingCard.media.imageUrl);
+  }
 
   return {
     sourceUrl: sourceUrl || "",
     sourceTitle: sourceTitle || "",
+    alreadySaved: Boolean(existingCard),
+    existingCardId: existingCard?.id,
     swedish: {
       surfaceForm: cleaned,
-      lemma,
+      lemma: formattedLemma,
       article,
       partOfSpeech,
       inflections: geminiData?.inflections || "",
@@ -606,70 +791,76 @@ async function analyzeSwedishWord({
   };
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "svenska-spaced-lookup",
-    title: "🇸🇪 Look up '%s' in SvenskaSpaced",
-    contexts: ["selection"]
-  });
-});
-
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "svenska-spaced-lookup" && tab?.id) {
-    chrome.tabs.sendMessage(tab.id, {
-      type: "TRIGGER_SELECTION_LOOKUP",
-      selectionText: info.selectionText
+if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
+  chrome.runtime.onInstalled.addListener(() => {
+    chrome.contextMenus.create({
+      id: "svenska-spaced-lookup",
+      title: "🇸🇪 Look up '%s' in SvenskaSpaced",
+      contexts: ["selection"]
     });
-  }
-});
+  });
+}
 
-chrome.runtime.onMessage.addListener(
-  (message: ExtensionMessage, _sender, sendResponse) => {
-    (async () => {
-      try {
-        switch (message.type) {
-          case "ANALYZE_WORD": {
-            const result = await analyzeSwedishWord(message.payload);
-            sendResponse({ ok: true, data: result });
-            break;
+if (typeof chrome !== "undefined" && chrome.contextMenus?.onClicked) {
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === "svenska-spaced-lookup" && tab?.id) {
+      chrome.tabs.sendMessage(tab.id, {
+        type: "TRIGGER_SELECTION_LOOKUP",
+        selectionText: info.selectionText
+      });
+    }
+  });
+}
+
+if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener(
+    (message: ExtensionMessage, _sender, sendResponse) => {
+      (async () => {
+        try {
+          switch (message.type) {
+            case "ANALYZE_WORD": {
+              const result = await analyzeSwedishWord(message.payload);
+              sendResponse({ ok: true, data: result });
+              break;
+            }
+            case "SAVE_CARD": {
+              const saved = await saveCardToStorage(message.payload);
+              sendResponse({ ok: true, data: saved });
+              break;
+            }
+            case "GET_CARDS": {
+              const cards = await getAllCards();
+              sendResponse({ ok: true, data: cards });
+              break;
+            }
+            case "DELETE_CARD": {
+              const remaining = await deleteCard(message.cardId);
+              sendResponse({ ok: true, data: remaining });
+              break;
+            }
+            case "GET_SETTINGS": {
+              const settings = await getSettings();
+              sendResponse({ ok: true, data: settings });
+              break;
+            }
+            case "SAVE_SETTINGS": {
+              const updated = await saveSettings(message.payload);
+              sendResponse({ ok: true, data: updated });
+              break;
+            }
+            case "SYNC_ALL": {
+              const count = await syncAllLocalToCloud();
+              sendResponse({ ok: true, count });
+              break;
+            }
+            default:
+              sendResponse({ ok: false, error: "Unknown message type" });
           }
-          case "SAVE_CARD": {
-            const saved = await saveCardToStorage(message.payload);
-            sendResponse({ ok: true, data: saved });
-            break;
-          }
-          case "GET_CARDS": {
-            const cards = await getAllCards();
-            sendResponse({ ok: true, data: cards });
-            break;
-          }
-          case "DELETE_CARD": {
-            const remaining = await deleteCard(message.cardId);
-            sendResponse({ ok: true, data: remaining });
-            break;
-          }
-          case "GET_SETTINGS": {
-            const settings = await getSettings();
-            sendResponse({ ok: true, data: settings });
-            break;
-          }
-          case "SAVE_SETTINGS": {
-            const updated = await saveSettings(message.payload);
-            sendResponse({ ok: true, data: updated });
-            break;
-          }
-          case "SYNC_ALL": {
-            const count = await syncAllLocalToCloud();
-            sendResponse({ ok: true, count });
-            break;
-          }
-          default:
-            sendResponse({ ok: false, error: "Unknown message type" });
+        } catch (err: any) {
+          sendResponse({ ok: false, error: err?.message || String(err) });
         }
-      } catch (err: any) {
-        sendResponse({ ok: false, error: err?.message || String(err) });
-      }
-    })();
-    return true;
-  }
-);
+      })();
+      return true;
+    }
+  );
+}

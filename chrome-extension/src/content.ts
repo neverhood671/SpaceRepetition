@@ -331,6 +331,32 @@ interface SelectedSubtitleToken {
         background: #16a34a;
         cursor: default;
       }
+      .sv-save-btn.saved-existing {
+        background: #fef3c7;
+        color: #92400e;
+        border: 1.5px solid #f59e0b;
+        cursor: not-allowed;
+      }
+      .sv-popover.sv-popover-saved {
+        border: 2px solid #f59e0b;
+        box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35), 0 0 0 3px rgba(245, 158, 11, 0.25);
+      }
+      .sv-header.sv-header-saved {
+        background: linear-gradient(135deg, #0f766e 0%, #065f46 100%);
+      }
+      .sv-already-saved-banner {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: #fef3c7;
+        color: #92400e;
+        border: 1px solid #fcd34d;
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
       .sv-source-pill {
         font-size: 10.5px;
         color: #64748b;
@@ -401,6 +427,12 @@ interface SelectedSubtitleToken {
         color: #0f172a;
         text-shadow: none;
         box-shadow: 0 0 0 2px #005B99;
+      }
+      .sv-sub-word.already-saved {
+        background: #fde68a;
+        color: #78350f;
+        text-shadow: none;
+        box-shadow: 0 0 0 2px #f59e0b;
       }
     `;
     shadowRoot.appendChild(style);
@@ -765,6 +797,7 @@ interface SelectedSubtitleToken {
     if (!triggerBtn || !popoverEl) return;
     isCardOpen = true;
     triggerBtn.style.display = "none";
+    popoverEl.classList.remove("sv-popover-saved");
     popoverEl.style.display = "block";
     positionElementNearRect(popoverEl, selData.rect, 355, 250);
 
@@ -829,8 +862,22 @@ interface SelectedSubtitleToken {
     const sw = data.swedish || { surfaceForm: "", lemma: "" };
     const en = data.english || {};
     const media = data.media || {};
-    const alternatives =
-      media.imageAlternatives || (media.imageUrl ? [media.imageUrl] : []);
+    const isAlreadySaved = Boolean(data.alreadySaved);
+
+    popoverEl.classList.toggle("sv-popover-saved", isAlreadySaved);
+    if (isAlreadySaved) {
+      for (const token of selectedSubtitleTokens) {
+        token.el?.classList?.add("already-saved");
+      }
+    }
+
+    const rawAlternatives =
+      media.imageAlternatives && media.imageAlternatives.length > 0
+        ? media.imageAlternatives
+        : media.imageUrl
+        ? [media.imageUrl]
+        : [];
+    const alternatives = rawAlternatives.filter(Boolean);
 
     const badgeClass =
       sw.article === "en"
@@ -842,7 +889,7 @@ interface SelectedSubtitleToken {
     const fullLemma = sw.article ? `${sw.article} ${sw.lemma}` : sw.lemma;
 
     popoverEl.innerHTML = `
-      <div class="sv-header">
+      <div class="sv-header ${isAlreadySaved ? "sv-header-saved" : ""}">
         <div class="sv-header-left">
           <span class="sv-badge ${badgeClass}">${escapeHtml(badgeLabel)}</span>
           <span class="sv-word-title">${escapeHtml(fullLemma)}</span>
@@ -850,13 +897,23 @@ interface SelectedSubtitleToken {
         <button class="sv-close-btn" id="sv-close">✕</button>
       </div>
       <div class="sv-body">
+        ${
+          isAlreadySaved
+            ? `
+          <div class="sv-already-saved-banner" id="sv-already-saved-banner">
+            <span>★</span><span>Already saved in your vocabulary deck</span>
+          </div>
+        `
+            : ""
+        }
         <div class="sv-row-top">
           <div>
             <div class="sv-translation-main">${escapeHtml(
               en.lemmaTranslation || en.contextualTranslation || "—"
             )}</div>
             ${
-              sw.surfaceForm.toLowerCase() !== sw.lemma.toLowerCase()
+              sw.surfaceForm.toLowerCase() !==
+              sw.lemma.replace(/^att\s+/i, "").toLowerCase()
                 ? `<div class="sv-sub-surface">In text: <b>${escapeHtml(
                     sw.surfaceForm
                   )}</b> (${escapeHtml(en.contextualTranslation)})</div>`
@@ -871,10 +928,10 @@ interface SelectedSubtitleToken {
         ${
           alternatives.length > 0
             ? `
-          <div class="sv-image-wrap">
+          <div class="sv-image-wrap" id="sv-image-wrap">
             <img id="sv-card-img" src="${escapeHtml(
               alternatives[0]
-            )}" alt="${escapeHtml(sw.lemma)}" />
+            )}" alt="${escapeHtml(sw.lemma)}" referrerpolicy="no-referrer" />
             ${
               alternatives.length > 1
                 ? `<button class="sv-next-img-btn" id="sv-next-img">↻ Image 1/${alternatives.length}</button>`
@@ -919,9 +976,15 @@ interface SelectedSubtitleToken {
             : ""
         }
 
-        <button class="sv-save-btn" id="sv-save-card">
-          <span>💾</span><span>Save to Cloud Deck</span>
-        </button>
+        ${
+          isAlreadySaved
+            ? `<button class="sv-save-btn saved saved-existing" id="sv-save-card" disabled>
+                <span>★</span><span>Already Saved in Deck</span>
+              </button>`
+            : `<button class="sv-save-btn" id="sv-save-card">
+                <span>💾</span><span>Save to Cloud Deck</span>
+              </button>`
+        }
         <div class="sv-source-pill">🎙️ Audio: ${escapeHtml(
           media.audioSource || "Swedish Dictionary"
         )}</div>
@@ -943,6 +1006,32 @@ interface SelectedSubtitleToken {
     const imgEl = popoverEl.querySelector(
       "#sv-card-img"
     ) as HTMLImageElement | null;
+    const imgWrap = popoverEl.querySelector(
+      "#sv-image-wrap"
+    ) as HTMLDivElement | null;
+
+    if (imgEl && alternatives.length > 0) {
+      let failedCount = 0;
+      imgEl.addEventListener("error", () => {
+        failedCount++;
+        if (failedCount < alternatives.length) {
+          currentImageIdx = (currentImageIdx + 1) % alternatives.length;
+          const fallbackUrl = alternatives[currentImageIdx];
+          imgEl.src = fallbackUrl;
+          if (currentEnrichment) {
+            currentEnrichment.media.imageUrl = fallbackUrl;
+          }
+          if (nextImgBtn) {
+            nextImgBtn.textContent = `↻ Image ${currentImageIdx + 1}/${
+              alternatives.length
+            }`;
+          }
+        } else if (imgWrap) {
+          imgWrap.style.display = "none";
+        }
+      });
+    }
+
     if (nextImgBtn && imgEl && alternatives.length > 1) {
       nextImgBtn.addEventListener("click", () => {
         currentImageIdx = (currentImageIdx + 1) % alternatives.length;
@@ -960,27 +1049,39 @@ interface SelectedSubtitleToken {
     const saveBtn = popoverEl.querySelector(
       "#sv-save-card"
     ) as HTMLButtonElement | null;
-    saveBtn?.addEventListener("click", () => {
-      if (saveBtn.classList.contains("saved")) return;
-      saveBtn.textContent = "Saving…";
-      chrome.runtime.sendMessage(
-        {
-          type: "SAVE_CARD",
-          payload: currentEnrichment
-        },
-        (res: ExtensionResponse<SaveCardResult>) => {
-          if (res?.ok) {
-            saveBtn.classList.add("saved");
-            const synced = res.data?.cloudSynced;
-            saveBtn.innerHTML = synced
-              ? "<span>✓</span><span>Saved to Cloud Firestore!</span>"
-              : "<span>✓</span><span>Saved to Deck (Local)</span>";
-          } else {
-            saveBtn.textContent = "⚠️ Retry Save";
+    if (!isAlreadySaved && saveBtn) {
+      saveBtn.addEventListener("click", () => {
+        if (saveBtn.classList.contains("saved") || saveBtn.disabled) return;
+        saveBtn.textContent = "Saving…";
+        chrome.runtime.sendMessage(
+          {
+            type: "SAVE_CARD",
+            payload: currentEnrichment
+          },
+          (res: ExtensionResponse<SaveCardResult>) => {
+            if (res?.ok) {
+              saveBtn.classList.add("saved");
+              saveBtn.disabled = true;
+              if (res.data?.alreadyExisted) {
+                saveBtn.classList.add("saved-existing");
+                saveBtn.innerHTML =
+                  "<span>★</span><span>Already Saved in Deck</span>";
+              } else {
+                const synced = res.data?.cloudSynced;
+                saveBtn.innerHTML = synced
+                  ? "<span>✓</span><span>Saved to Cloud Firestore!</span>"
+                  : "<span>✓</span><span>Saved to Deck (Local)</span>";
+              }
+              for (const token of selectedSubtitleTokens) {
+                token.el?.classList?.add("already-saved");
+              }
+            } else {
+              saveBtn.textContent = "⚠️ Retry Save";
+            }
           }
-        }
-      );
-    });
+        );
+      });
+    }
 
     playPronunciation(media);
   }
