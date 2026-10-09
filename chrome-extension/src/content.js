@@ -1,6 +1,13 @@
 /**
  * Content Script for SvenskaSpaced Chrome Extension
- * Uses Shadow DOM so webpage styles never conflict with the floating lookup card.
+ * Features:
+ * 1. Universal webpage Swedish word selection -> Floating Dictionary + Google Image + Audio Card
+ * 2. Dedicated SVT Play (svtplay.se) Interactive Subtitle Overlay:
+ *    - Watches [data-rt="subtitles-container"] via MutationObserver
+ *    - Renders high-z-index clickable word chips on top of the video player
+ *    - Auto-pauses video[data-rt="video-player"] on subtitle hover & auto-resumes on leave/close
+ *    - Rolling 8-line subtitle history drawer so you never miss a fast subtitle
+ *    - Fullscreen-aware mounting
  */
 
 (function () {
@@ -11,16 +18,39 @@
   let shadowRoot = null;
   let triggerBtn = null;
   let popoverEl = null;
+
+  // SVT Play Subtitle Overlay state
+  let subOverlayWrap = null;
+  let subLinesEl = null;
+  let subHistoryDrawerEl = null;
+  let subStatusBadgeEl = null;
+  let observedSubContainer = null;
+  let subMutationObserver = null;
+  let autoPausedVideo = null;
+  let isCardOpen = false;
+  let isHistoryOpen = false;
+  let lastSubtitleSentence = "";
+  const subtitleHistory = []; // Array of { lines: string[], sentence: string, time: string }
+  let selectedSubtitleTokens = []; // Array of { word: string, tokenIndex: number, sentence: string, el: HTMLElement }
+
   let currentSelectionData = null;
   let currentEnrichment = null;
   let currentImageIdx = 0;
 
   function initShadowHost() {
-    if (hostEl) return;
+    const targetParent = document.fullscreenElement || document.documentElement;
+    if (hostEl) {
+      if (hostEl.parentElement !== targetParent) {
+        targetParent.appendChild(hostEl);
+      }
+      return;
+    }
+
     hostEl = document.createElement("div");
     hostEl.id = "svenska-spaced-extension-root";
-    hostEl.style.cssText = "all: initial; position: fixed; z-index: 2147483647; top: 0; left: 0; width: 0; height: 0;";
-    document.documentElement.appendChild(hostEl);
+    hostEl.style.cssText =
+      "all: initial; position: fixed; z-index: 2147483647; top: 0; left: 0; width: 0; height: 0; pointer-events: none;";
+    targetParent.appendChild(hostEl);
     shadowRoot = hostEl.attachShadow({ mode: "open" });
 
     const style = document.createElement("style");
@@ -44,6 +74,7 @@
         cursor: pointer;
         box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
         user-select: none;
+        pointer-events: auto;
         transition: transform 0.12s ease, background 0.12s ease;
         z-index: 2147483647;
       }
@@ -54,16 +85,17 @@
       .sv-popover {
         position: fixed;
         display: none;
-        width: 350px;
+        width: 355px;
         max-width: calc(100vw - 24px);
         background: #ffffff;
         color: #0f172a;
         border-radius: 16px;
         border: 1px solid #e2e8f0;
-        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.24), 0 0 0 1px rgba(15, 23, 42, 0.05);
+        box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(15, 23, 42, 0.08);
         overflow: hidden;
+        pointer-events: auto;
         z-index: 2147483647;
-        animation: svFadeIn 0.15s ease-out;
+        animation: svFadeIn 0.14s ease-out;
       }
       @keyframes svFadeIn {
         from { opacity: 0; transform: translateY(6px); }
@@ -282,9 +314,139 @@
         text-align: center;
         margin-top: 6px;
       }
+
+      /* =====================================================
+         SVT PLAY INTERACTIVE SUBTITLE OVERLAY STYLES
+         ===================================================== */
+      .sv-sub-overlay-wrap {
+        position: fixed;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        pointer-events: none;
+        z-index: 2147483646;
+        transition: opacity 0.15s ease;
+      }
+      .sv-sub-bar {
+        pointer-events: auto;
+        background: rgba(10, 15, 28, 0.86);
+        backdrop-filter: blur(6px);
+        border: 1.5px solid rgba(255, 255, 255, 0.18);
+        border-radius: 14px;
+        padding: 8px 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+        max-width: 92%;
+        user-select: text;
+      }
+      .sv-sub-bar:hover {
+        border-color: #FECC02;
+        background: rgba(10, 15, 28, 0.94);
+      }
+      .sv-sub-lines {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        text-align: center;
+      }
+      .sv-sub-line {
+        font-size: clamp(16px, 2.1vw, 24px);
+        line-height: 1.35;
+        font-weight: 600;
+        color: #ffffff;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+      }
+      .sv-sub-word {
+        display: inline-block;
+        padding: 1px 4px;
+        margin: 0 1px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.1s ease, color 0.1s ease, transform 0.1s ease;
+      }
+      .sv-sub-word:hover {
+        background: rgba(254, 204, 2, 0.85);
+        color: #0f172a;
+        text-shadow: none;
+        transform: translateY(-1px);
+      }
+      .sv-sub-word.selected {
+        background: #FECC02;
+        color: #0f172a;
+        text-shadow: none;
+        box-shadow: 0 0 0 2px #005B99;
+      }
+      .sv-sub-controls {
+        display: flex;
+         flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        border-left: 1px solid rgba(255, 255, 255, 0.18);
+        padding-left: 10px;
+      }
+      .sv-sub-hist-btn {
+        background: rgba(255, 255, 255, 0.14);
+        border: none;
+        color: #ffffff;
+        border-radius: 8px;
+        padding: 4px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .sv-sub-hist-btn:hover {
+        background: #005B99;
+      }
+      .sv-sub-status {
+        font-size: 10px;
+        color: #FECC02;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .sv-sub-history-drawer {
+        pointer-events: auto;
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid rgba(254, 204, 2, 0.45);
+        border-radius: 12px;
+        padding: 10px 14px;
+        margin-bottom: 8px;
+        max-height: 220px;
+        overflow-y: auto;
+        width: min(620px, 90vw);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+      }
+      .sv-hist-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 11.5px;
+        font-weight: 700;
+        color: #94a3b8;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        padding-bottom: 6px;
+        margin-bottom: 2px;
+      }
+      .sv-hist-item {
+        font-size: 14px;
+        color: #f8fafc;
+        padding: 4px 6px;
+        border-radius: 6px;
+        line-height: 1.4;
+      }
+      .sv-hist-item:hover {
+        background: rgba(255, 255, 255, 0.06);
+      }
     `;
     shadowRoot.appendChild(style);
 
+    // 1. Standard Selection Trigger Pill
     triggerBtn = document.createElement("button");
     triggerBtn.className = "sv-trigger-pill";
     triggerBtn.innerHTML = `<span>🇸🇪</span><span>Translate & Save</span>`;
@@ -297,31 +459,365 @@
     });
     shadowRoot.appendChild(triggerBtn);
 
+    // 2. SVT Play Interactive Subtitle Overlay
+    subOverlayWrap = document.createElement("div");
+    subOverlayWrap.className = "sv-sub-overlay-wrap";
+    subOverlayWrap.innerHTML = `
+      <div class="sv-sub-history-drawer" id="sv-sub-history"></div>
+      <div class="sv-sub-bar" id="sv-sub-bar">
+        <div class="sv-sub-lines" id="sv-sub-lines"></div>
+        <div class="sv-sub-controls">
+          <button class="sv-sub-hist-btn" id="sv-hist-toggle" title="Show recent subtitles">🕘 History</button>
+          <span class="sv-sub-status" id="sv-sub-status"></span>
+        </div>
+      </div>
+    `;
+
+    // Prevent clicks on subtitle bar from reaching SVT Play's video click-shield
+    ["mousedown", "mouseup", "click", "dblclick", "pointerdown"].forEach((evtName) => {
+      subOverlayWrap.addEventListener(evtName, (e) => {
+        e.stopPropagation();
+      });
+    });
+
+    const subBar = subOverlayWrap.querySelector("#sv-sub-bar");
+    subLinesEl = subOverlayWrap.querySelector("#sv-sub-lines");
+    subHistoryDrawerEl = subOverlayWrap.querySelector("#sv-sub-history");
+    subStatusBadgeEl = subOverlayWrap.querySelector("#sv-sub-status");
+
+    // Auto-pause SVT Play video when hovering the subtitle bar
+    subBar.addEventListener("mouseenter", () => {
+      pauseVideoIfPlaying();
+    });
+
+    subBar.addEventListener("mouseleave", () => {
+      if (!isCardOpen && !isHistoryOpen) {
+        resumeVideoIfAutoPaused();
+      }
+    });
+
+    subOverlayWrap.querySelector("#sv-hist-toggle")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      isHistoryOpen = !isHistoryOpen;
+      if (isHistoryOpen) {
+        pauseVideoIfPlaying();
+        renderSubtitleHistoryDrawer();
+        subHistoryDrawerEl.style.display = "flex";
+      } else {
+        subHistoryDrawerEl.style.display = "none";
+        if (!isCardOpen) resumeVideoIfAutoPaused();
+      }
+    });
+
+    shadowRoot.appendChild(subOverlayWrap);
+
+    // 3. Dictionary Lookup Card Popover
     popoverEl = document.createElement("div");
     popoverEl.className = "sv-popover";
-    popoverEl.addEventListener("mousedown", (e) => e.stopPropagation());
+    ["mousedown", "mouseup", "click", "dblclick"].forEach((evtName) => {
+      popoverEl.addEventListener(evtName, (e) => e.stopPropagation());
+    });
     shadowRoot.appendChild(popoverEl);
   }
 
+  // Keep Shadow Host inside fullscreen element when toggling fullscreen on SVT Play
+  document.addEventListener("fullscreenchange", () => {
+    initShadowHost();
+    updateSubtitleOverlayPosition();
+  });
+
   /**
-   * Extract the sentence surrounding the user's text selection
+   * Auto-pause SVT Play's <video data-rt="video-player"> while inspecting subtitles
+   */
+  function getVideoElement() {
+    return (
+      document.querySelector('video[data-rt="video-player"]') ||
+      document.querySelector("video")
+    );
+  }
+
+  function pauseVideoIfPlaying() {
+    const video = getVideoElement();
+    if (video && !video.paused) {
+      video.pause();
+      autoPausedVideo = video;
+      if (subStatusBadgeEl) {
+        subStatusBadgeEl.textContent = "⏸ Paused";
+      }
+    }
+  }
+
+  function resumeVideoIfAutoPaused() {
+    if (autoPausedVideo && autoPausedVideo.paused) {
+      autoPausedVideo.play().catch(() => {});
+    }
+    autoPausedVideo = null;
+    if (subStatusBadgeEl) {
+      subStatusBadgeEl.textContent = "";
+    }
+  }
+
+  function clearSelectedSubtitleTokens() {
+    for (const t of selectedSubtitleTokens) {
+      t.el?.classList?.remove("selected");
+    }
+    selectedSubtitleTokens = [];
+  }
+
+  function handleSubtitleWordClick(e, word, tokenIndex, fullSentence, wordSpan) {
+    e.preventDefault();
+    e.stopPropagation();
+    pauseVideoIfPlaying();
+
+    const isMultiSelect = e.metaKey || e.ctrlKey;
+
+    if (
+      !isMultiSelect ||
+      (selectedSubtitleTokens.length > 0 &&
+        selectedSubtitleTokens[0].sentence !== fullSentence)
+    ) {
+      clearSelectedSubtitleTokens();
+      selectedSubtitleTokens = [
+        { word, tokenIndex, sentence: fullSentence, el: wordSpan }
+      ];
+      wordSpan.classList.add("selected");
+    } else {
+      const existingIdx = selectedSubtitleTokens.findIndex(
+        (t) => t.tokenIndex === tokenIndex
+      );
+      if (existingIdx >= 0 && selectedSubtitleTokens.length > 1) {
+        selectedSubtitleTokens[existingIdx].el?.classList?.remove("selected");
+        selectedSubtitleTokens.splice(existingIdx, 1);
+      } else if (existingIdx === -1) {
+        selectedSubtitleTokens.push({
+          word,
+          tokenIndex,
+          sentence: fullSentence,
+          el: wordSpan
+        });
+        wordSpan.classList.add("selected");
+      }
+      // Keep selected words in sentence order (e.g., "höll" + "till" -> "höll till")
+      selectedSubtitleTokens.sort((a, b) => a.tokenIndex - b.tokenIndex);
+    }
+
+    const combinedPhrase = selectedSubtitleTokens.map((t) => t.word).join(" ");
+    const rect = wordSpan.getBoundingClientRect();
+    openLookupPopover({
+      word: combinedPhrase,
+      contextSentence: fullSentence,
+      rect: {
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        right: rect.right,
+        width: rect.width
+      }
+    });
+  }
+
+  /**
+   * Tokenize a Swedish line into clickable word chips + preserved punctuation/spaces
+   */
+  function renderTokenizedLine(lineText, fullSentence, startTokenIndex = 0) {
+    const lineDiv = document.createElement("div");
+    lineDiv.className = "sv-sub-line";
+    let tokenCounter = startTokenIndex;
+
+    // Split keeping Swedish words (letters, numbers, hyphens) as tokens
+    const parts = lineText.split(/([\p{L}\p{N}-]+)/gu);
+    for (const part of parts) {
+      if (!part) continue;
+      if (/^[\p{L}\p{N}-]+$/u.test(part)) {
+        const thisIdx = tokenCounter++;
+        const wordSpan = document.createElement("span");
+        wordSpan.className = "sv-sub-word";
+        wordSpan.textContent = part;
+        wordSpan.title = "Click to look up • ⌘+Click (or Ctrl+Click) to combine multiple words (partikelverb)";
+        wordSpan.addEventListener("click", (e) =>
+          handleSubtitleWordClick(e, part, thisIdx, fullSentence, wordSpan)
+        );
+        lineDiv.appendChild(wordSpan);
+      } else {
+        lineDiv.appendChild(document.createTextNode(part));
+      }
+    }
+    return { lineDiv, nextTokenIndex: tokenCounter };
+  }
+
+  function renderSubtitleHistoryDrawer() {
+    if (!subHistoryDrawerEl) return;
+    subHistoryDrawerEl.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "sv-hist-header";
+    header.innerHTML = `<span>🕘 Recent Subtitles (Click word • ⌘+Click for partikelverb)</span><span style="cursor:pointer;color:#fff;" id="sv-close-hist">✕</span>`;
+    header.querySelector("#sv-close-hist")?.addEventListener("click", () => {
+      isHistoryOpen = false;
+      subHistoryDrawerEl.style.display = "none";
+      if (!isCardOpen) resumeVideoIfAutoPaused();
+    });
+    subHistoryDrawerEl.appendChild(header);
+
+    if (subtitleHistory.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:#94a3b8;font-size:12px;padding:8px 0;";
+      empty.textContent = "No subtitles captured yet.";
+      subHistoryDrawerEl.appendChild(empty);
+      return;
+    }
+
+    for (const item of subtitleHistory) {
+      const row = document.createElement("div");
+      row.className = "sv-hist-item";
+      let histTokenIdx = 0;
+      const parts = item.sentence.split(/([\p{L}\p{N}-]+)/gu);
+      for (const part of parts) {
+        if (!part) continue;
+        if (/^[\p{L}\p{N}-]+$/u.test(part)) {
+          const thisIdx = histTokenIdx++;
+          const w = document.createElement("span");
+          w.className = "sv-sub-word";
+          w.textContent = part;
+          w.addEventListener("click", (e) =>
+            handleSubtitleWordClick(e, part, thisIdx, item.sentence, w)
+          );
+          row.appendChild(w);
+        } else {
+          row.appendChild(document.createTextNode(part));
+        }
+      }
+      subHistoryDrawerEl.appendChild(row);
+    }
+  }
+
+  /**
+   * Read SVT Play's [data-rt="subtitles-container"] spans and render our interactive overlay
+   */
+  function syncSvtSubtitles() {
+    if (!observedSubContainer) return;
+    initShadowHost();
+
+    // Hide SVT Play's native text visually so we don't see duplicate text, while keeping DOM active
+    observedSubContainer.style.opacity = "0";
+    observedSubContainer.style.pointerEvents = "none";
+
+    // Extract leaf <span> elements so adjacent spans don't merge words without a space
+    const leafSpans = Array.from(observedSubContainer.querySelectorAll("span")).filter(
+      (s) => s.children.length === 0 && s.textContent.trim().length > 0
+    );
+
+    let lines = leafSpans.map((s) => s.textContent.replace(/\s+/g, " ").trim());
+    if (lines.length === 0) {
+      const raw = observedSubContainer.innerText?.trim() || "";
+      if (raw) {
+        lines = raw.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+      }
+    }
+
+    if (lines.length === 0) {
+      // No active subtitle right now; keep overlay visible only if history drawer is open
+      if (!isHistoryOpen) {
+        subOverlayWrap.style.display = "none";
+      }
+      return;
+    }
+
+    const fullSentence = lines.join(" ").replace(/\s+/g, " ").trim();
+
+    // Record in rolling history (up to 8 recent sentences)
+    if (fullSentence && fullSentence !== lastSubtitleSentence) {
+      lastSubtitleSentence = fullSentence;
+      if (!subtitleHistory.some((h) => h.sentence === fullSentence)) {
+        subtitleHistory.unshift({ lines, sentence: fullSentence });
+        if (subtitleHistory.length > 8) subtitleHistory.pop();
+      }
+      if (isHistoryOpen) {
+        renderSubtitleHistoryDrawer();
+      }
+    }
+
+    subLinesEl.innerHTML = "";
+    let runningTokenIndex = 0;
+    for (const line of lines) {
+      const { lineDiv, nextTokenIndex } = renderTokenizedLine(
+        line,
+        fullSentence,
+        runningTokenIndex
+      );
+      runningTokenIndex = nextTokenIndex;
+      subLinesEl.appendChild(lineDiv);
+    }
+
+    subOverlayWrap.style.display = "flex";
+    updateSubtitleOverlayPosition();
+  }
+
+  function updateSubtitleOverlayPosition() {
+    if (!subOverlayWrap || subOverlayWrap.style.display === "none") return;
+    const video = getVideoElement() || observedSubContainer;
+    if (!video) return;
+
+    const rect = video.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
+    // Position centered horizontally over the video player, ~68px above bottom of video
+    const bottomOffset = Math.max(24, window.innerHeight - rect.bottom + Math.min(72, rect.height * 0.12));
+    subOverlayWrap.style.left = `${Math.round(rect.left)}px`;
+    subOverlayWrap.style.width = `${Math.round(rect.width)}px`;
+    subOverlayWrap.style.bottom = `${Math.round(bottomOffset)}px`;
+  }
+
+  /**
+   * Watch for SVT Play's [data-rt="subtitles-container"] appearing or updating
+   */
+  function setupSvtPlayWatcher() {
+    const checkContainer = () => {
+      const container = document.querySelector('[data-rt="subtitles-container"]');
+      if (container && container !== observedSubContainer) {
+        observedSubContainer = container;
+        if (subMutationObserver) subMutationObserver.disconnect();
+
+        subMutationObserver = new MutationObserver(() => {
+          syncSvtSubtitles();
+        });
+        subMutationObserver.observe(container, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
+        syncSvtSubtitles();
+      } else if (!container && observedSubContainer) {
+        observedSubContainer = null;
+        if (subOverlayWrap) subOverlayWrap.style.display = "none";
+      }
+    };
+
+    checkContainer();
+    setInterval(checkContainer, 1000);
+    window.addEventListener("resize", updateSubtitleOverlayPosition);
+    window.addEventListener("scroll", updateSubtitleOverlayPosition, { passive: true });
+  }
+
+  setupSvtPlayWatcher();
+
+  /**
+   * Extract the sentence surrounding a normal webpage text selection
    */
   function extractContextSentence(selection) {
     try {
       if (!selection || selection.rangeCount === 0) return "";
       const range = selection.getRangeAt(0);
       const container = range.commonAncestorContainer;
-      const blockText = (
-        container.nodeType === Node.TEXT_NODE
+      const blockText =
+        (container.nodeType === Node.TEXT_NODE
           ? container.parentElement?.innerText || container.textContent
-          : container.innerText || container.textContent
-      ) || "";
+          : container.innerText || container.textContent) || "";
 
       const selectedWord = selection.toString().trim();
       const cleanBlock = blockText.replace(/\s+/g, " ").trim();
       if (!cleanBlock) return selectedWord;
 
-      // Split into sentences and find the one containing the selected word
       const sentences = cleanBlock.split(/(?<=[.!?])\s+/);
       const found = sentences.find((s) =>
         s.toLowerCase().includes(selectedWord.toLowerCase())
@@ -335,17 +831,25 @@
   function hideAll() {
     if (triggerBtn) triggerBtn.style.display = "none";
     if (popoverEl) popoverEl.style.display = "none";
+    clearSelectedSubtitleTokens();
+    if (isCardOpen) {
+      isCardOpen = false;
+      if (!isHistoryOpen) {
+        resumeVideoIfAutoPaused();
+      }
+    }
   }
 
-  function positionElementNearRect(el, rect, width = 350, height = 380) {
-    const margin = 10;
+  function positionElementNearRect(el, rect, width = 355, height = 390) {
+    const margin = 12;
     let left = Math.min(
-      Math.max(margin, rect.left),
+      Math.max(margin, rect.left + (rect.width || 0) / 2 - width / 2),
       window.innerWidth - width - margin
     );
-    let top = rect.bottom + 8;
-    if (top + height > window.innerHeight - margin && rect.top > height + margin) {
-      top = rect.top - height - 8;
+    // Prefer placing above the word if the word is in the lower half of the screen (like subtitles!)
+    let top = rect.bottom + 10;
+    if (rect.top > window.innerHeight * 0.55 || top + height > window.innerHeight - margin) {
+      top = Math.max(margin, rect.top - height - 12);
     }
     el.style.left = `${Math.round(left)}px`;
     el.style.top = `${Math.round(Math.max(margin, top))}px`;
@@ -355,9 +859,7 @@
     const src = media?.audioBase64 || media?.audioUrl;
     if (!src) return;
     const audio = new Audio(src);
-    audio.play().catch((err) => {
-      console.warn("Audio playback fallback:", err);
-      // Browser speechSynthesis fallback if remote stream is blocked
+    audio.play().catch(() => {
       if ("speechSynthesis" in window && currentEnrichment?.swedish?.lemma) {
         const utter = new SpeechSynthesisUtterance(
           currentEnrichment.swedish.article
@@ -372,9 +874,10 @@
 
   function openLookupPopover(selData) {
     initShadowHost();
+    isCardOpen = true;
     triggerBtn.style.display = "none";
     popoverEl.style.display = "block";
-    positionElementNearRect(popoverEl, selData.rect, 350, 260);
+    positionElementNearRect(popoverEl, selData.rect, 355, 250);
 
     popoverEl.innerHTML = `
       <div class="sv-header">
@@ -405,7 +908,11 @@
       },
       (response) => {
         if (chrome.runtime.lastError || !response?.ok) {
-          renderError(response?.error || chrome.runtime.lastError?.message || "Failed to look up word");
+          renderError(
+            response?.error ||
+              chrome.runtime.lastError?.message ||
+              "Failed to look up word"
+          );
           return;
         }
         currentEnrichment = response.data;
@@ -429,7 +936,8 @@
     const sw = data.swedish || {};
     const en = data.english || {};
     const media = data.media || {};
-    const alternatives = media.imageAlternatives || (media.imageUrl ? [media.imageUrl] : []);
+    const alternatives =
+      media.imageAlternatives || (media.imageUrl ? [media.imageUrl] : []);
 
     const badgeClass =
       sw.article === "en"
@@ -456,7 +964,7 @@
             )}</div>
             ${
               sw.surfaceForm.toLowerCase() !== sw.lemma.toLowerCase()
-                ? `<div class="sv-sub-surface">On page: <b>${escapeHtml(
+                ? `<div class="sv-sub-surface">In text: <b>${escapeHtml(
                     sw.surfaceForm
                   )}</b> (${escapeHtml(en.contextualTranslation)})</div>`
                 : ""
@@ -511,11 +1019,13 @@
         <button class="sv-save-btn" id="sv-save-card">
           <span>💾</span><span>Save to Cloud Deck</span>
         </button>
-        <div class="sv-source-pill">🎙️ Audio: ${escapeHtml(media.audioSource || "Swedish Dictionary")}</div>
+        <div class="sv-source-pill">🎙️ Audio: ${escapeHtml(
+          media.audioSource || "Swedish Dictionary"
+        )}</div>
       </div>
     `;
 
-    positionElementNearRect(popoverEl, rect, 350, 420);
+    positionElementNearRect(popoverEl, rect, 355, 420);
 
     popoverEl.querySelector("#sv-close")?.addEventListener("click", hideAll);
     popoverEl.querySelector("#sv-play-audio")?.addEventListener("click", () => {
@@ -557,7 +1067,6 @@
       );
     });
 
-    // Auto-play pronunciation upon lookup
     playPronunciation(media);
   }
 
@@ -569,13 +1078,12 @@
       .replace(/"/g, "&quot;");
   }
 
-  // Listen for text selection on any webpage
+  // Listen for normal text selection on any webpage
   document.addEventListener("mouseup", (e) => {
     setTimeout(() => {
       const sel = window.getSelection();
       const rawText = sel ? sel.toString().trim() : "";
 
-      // Ignore empty selections or long paragraphs (>45 chars or >4 words)
       if (!rawText || rawText.length > 45 || rawText.split(/\s+/).length > 4) {
         if (triggerBtn && (!popoverEl || popoverEl.style.display === "none")) {
           triggerBtn.style.display = "none";
@@ -595,27 +1103,26 @@
           top: rect.top,
           bottom: rect.bottom,
           left: rect.left,
-          right: rect.right
+          right: rect.right,
+          width: rect.width
         }
       };
 
-      // If user held Alt while selecting, open the full card immediately
       if (e.altKey) {
         openLookupPopover(currentSelectionData);
         return;
       }
 
-      // Otherwise show the small floating "🇸🇪 Translate & Save" pill
       triggerBtn.style.display = "inline-flex";
       positionElementNearRect(triggerBtn, currentSelectionData.rect, 150, 36);
     }, 15);
   });
 
-  // Hide trigger pill when clicking elsewhere
+  // Hide trigger pill / popover when clicking elsewhere on the page
   document.addEventListener("mousedown", () => {
     if (triggerBtn) triggerBtn.style.display = "none";
     if (popoverEl && popoverEl.style.display === "block") {
-      popoverEl.style.display = "none";
+      hideAll();
     }
   });
 
@@ -626,7 +1133,13 @@
       const rect =
         sel && sel.rangeCount > 0
           ? sel.getRangeAt(0).getBoundingClientRect()
-          : { top: 80, bottom: 100, left: window.innerWidth / 2 - 175, right: window.innerWidth / 2 };
+          : {
+              top: 80,
+              bottom: 100,
+              left: window.innerWidth / 2 - 175,
+              right: window.innerWidth / 2,
+              width: 100
+            };
 
       currentSelectionData = {
         word: msg.selectionText || sel?.toString()?.trim() || "",

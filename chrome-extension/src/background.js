@@ -64,6 +64,38 @@ async function querySwedishWiktionary(word) {
       console.warn("Wiktionary lookup error:", e);
     }
   }
+
+  // Handle multi-word Swedish partikelverb (e.g. "höll till" -> de-inflect "höll" to "hålla" -> query "hålla till")
+  const tokens = word.trim().split(/\s+/);
+  if (tokens.length >= 2) {
+    const firstWordInfo = await querySwedishWiktionary(tokens[0]);
+    if (firstWordInfo?.lemma) {
+      const reconstructedLemma = [
+        firstWordInfo.lemma.toLowerCase(),
+        ...tokens.slice(1).map((t) => t.toLowerCase())
+      ].join(" ");
+      if (reconstructedLemma !== word.toLowerCase()) {
+        const particleEntry = await parseWiktionarySwedishEntry(reconstructedLemma);
+        if (particleEntry) {
+          return {
+            ...particleEntry,
+            lemma: reconstructedLemma,
+            partOfSpeech: "partikelverb"
+          };
+        }
+      }
+      return {
+        lemma: reconstructedLemma,
+        article: "",
+        partOfSpeech: "partikelverb",
+        audioUrl: firstWordInfo.audioUrl || "",
+        audioSource: firstWordInfo.audioSource || "",
+        englishFromWiktionary: "",
+        definitionSv: ""
+      };
+    }
+  }
+
   return null;
 }
 
@@ -86,9 +118,10 @@ async function parseWiktionarySwedishEntry(lemma) {
 }
 
 async function parseWiktionarySection(lemma, svSection) {
-  // Determine Part of Speech
+  // Determine Part of Speech (including partikelverb)
   let partOfSpeech = "word";
-  if (/===Substantiv===/i.test(svSection)) partOfSpeech = "noun";
+  if (/partikelverb|partikel=/i.test(svSection)) partOfSpeech = "partikelverb";
+  else if (/===Substantiv===/i.test(svSection)) partOfSpeech = "noun";
   else if (/===Verb===/i.test(svSection)) partOfSpeech = "verb";
   else if (/===Adjektiv===/i.test(svSection)) partOfSpeech = "adjective";
   else if (/===Adverb===/i.test(svSection)) partOfSpeech = "adverb";
@@ -420,6 +453,15 @@ async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitl
     finalWiki = await parseWiktionarySwedishEntry(lemma);
   }
 
+  let baseGTrans = null;
+  if (
+    lemma.toLowerCase() !== cleaned.toLowerCase() &&
+    !geminiData?.lemmaTranslation &&
+    !finalWiki?.englishFromWiktionary
+  ) {
+    baseGTrans = await queryGoogleTranslateDictionary(lemma, "");
+  }
+
   const article = geminiData?.article || finalWiki?.article || "";
   const partOfSpeech =
     geminiData?.partOfSpeech ||
@@ -430,6 +472,8 @@ async function analyzeSwedishWord({ word, contextSentence, sourceUrl, sourceTitl
   const lemmaTranslation =
     geminiData?.lemmaTranslation ||
     finalWiki?.englishFromWiktionary ||
+    (baseGTrans?.synonyms?.length ? baseGTrans.synonyms.slice(0, 3).join(", ") : "") ||
+    baseGTrans?.wordTranslation ||
     (gTrans?.synonyms?.length ? gTrans.synonyms.slice(0, 3).join(", ") : "") ||
     gTrans?.wordTranslation ||
     "";
