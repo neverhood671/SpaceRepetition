@@ -232,6 +232,18 @@ export default function App() {
     }
   }
 
+  function handleDontRemember() {
+    if (!currentExercise || !currentCard || isChecked) return;
+    setIsChecked(true);
+    setIsCorrect(false);
+    setIsTypo(false);
+    setCardMistakes((prev) => ({
+      ...prev,
+      [currentCard.id]: (prev[currentCard.id] || 0) + 1
+    }));
+    playSwedishAudio(currentCard);
+  }
+
   // Advance to the next exercise in the linear flow
   async function handleContinue() {
     if (!currentExercise || !currentCard) return;
@@ -560,6 +572,18 @@ export default function App() {
                   returnKeyType="done"
                   autoFocus
                 />
+
+                {!isChecked && (
+                  <TouchableOpacity
+                    style={styles.dontRememberBtn}
+                    onPress={handleDontRemember}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.dontRememberText}>
+                      🤷‍♂️ I don't remember
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
           </ScrollView>
@@ -584,7 +608,9 @@ export default function App() {
                       ? isTypo
                         ? "✓ Good (Minor typo accepted)!"
                         : "✓ Excellent / Rätt!"
-                      : "✗ Not quite!"}
+                      : typedAnswer.trim()
+                      ? "✗ Not quite!"
+                      : "🤷‍♂️ No worries, let's learn it!"}
                   </Text>
                 </View>
 
@@ -979,6 +1005,22 @@ const styles = StyleSheet.create({
   keyboardInputWrong: {
     borderColor: "#ef4444",
     backgroundColor: "#fef2f2"
+  },
+  dontRememberBtn: {
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#cbd5e1",
+    backgroundColor: "#ffffff",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  dontRememberText: {
+    fontSize: 14.5,
+    fontWeight: "700",
+    color: "#64748b"
   },
   bottomBar: {
     borderTopWidth: 1,

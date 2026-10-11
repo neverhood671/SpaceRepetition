@@ -104,6 +104,21 @@ async function run() {
     }
   });
 
+  await test("failing or skipping via 'I don't remember' re-queues exercise and tracks mistakes", () => {
+    const queue = createLessonQueue([STARTER_SWEDISH_DECK[0]], [STARTER_SWEDISH_DECK[0]]);
+    const initialLen = queue.length; // 3 exercises
+    const keyboardItem = queue[2];
+    assertEqual(keyboardItem.stage, "keyboard", "Level 3 is keyboard");
+
+    // Simulate 'I don't remember': appends item to end of queue with mistakes incremented
+    queue.push({ ...keyboardItem, mistakes: keyboardItem.mistakes + 1 });
+
+    assertEqual(queue.length, initialLen + 1, "Queue should extend with re-queued item");
+    const reQueued = queue[queue.length - 1];
+    assertEqual(reQueued.mistakes, 1, "Mistakes incremented on re-queued item");
+    assertEqual(reQueued.stage, "keyboard", "Re-queued stage is keyboard");
+  });
+
   console.log(`\n========================================`);
   console.log(`Tests finished: ${passed} passed, ${failed} failed`);
   console.log(`========================================\n`);

@@ -266,6 +266,28 @@
       border-color: var(--red);
       background: #fef2f2;
     }
+    .dont-remember-btn {
+      width: 100%;
+      margin-top: 10px;
+      padding: 12px;
+      background: #ffffff;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 12px;
+      font-size: 14.5px;
+      font-weight: 700;
+      color: #64748b;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    .dont-remember-btn:hover {
+      background: #f8fafc;
+      border-color: #94a3b8;
+      color: #334155;
+    }
 
     /* Fixed Bottom Action & Feedback Bar */
     .bottom-bar {
@@ -839,16 +861,19 @@
         let inputClass = "keyboard-input";
         if (isChecked) inputClass += isCorrect ? " correct" : " wrong";
         inputHtml = `
-          <input
-            id="typed-input"
-            class="${inputClass}"
-            placeholder="Type translation in English..."
-            value="${typedAnswer}"
-            ${isChecked ? "disabled" : ""}
-            autocomplete="off"
-            autocorrect="off"
-            autocapitalize="off"
-          />
+          <div style="margin-top:4px;">
+            <input
+              id="typed-input"
+              class="${inputClass}"
+              placeholder="Type translation in English..."
+              value="${typedAnswer}"
+              ${isChecked ? "disabled" : ""}
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+            />
+            ${!isChecked ? `<button class="dont-remember-btn" id="dont-remember-btn">🤷‍♂️ I don't remember</button>` : ""}
+          </div>
         `;
       }
 
@@ -909,6 +934,10 @@
             }
           };
         }
+        const dontRemBtn = document.getElementById("dont-remember-btn");
+        if (dontRemBtn && !isChecked) {
+          dontRemBtn.onclick = handleDontRemember;
+        }
       }
 
       // Render Bottom Bar
@@ -916,7 +945,7 @@
         bottom.innerHTML = `
           <div>
             <div class="feedback-title" style="color:${isCorrect ? "#15803d" : "#b91c1c"}">
-              ${isCorrect ? (isTypo ? "✓ Good (Minor typo accepted)!" : "✓ Excellent / Rätt!") : "✗ Not quite!"}
+              ${isCorrect ? (isTypo ? "✓ Good (Minor typo accepted)!" : "✓ Excellent / Rätt!") : (typedAnswer.trim() ? "✗ Not quite!" : "🤷‍♂️ No worries, let's learn it!")}
             </div>
             ${!isCorrect ? `<div class="feedback-msg">Correct translation: <b>${card.english.lemmaTranslation}</b></div>` : (card.swedish.inflections ? `<div style="font-size:12.5px;color:#166534">Forms: ${card.swedish.inflections}</div>` : "")}
             <button class="continue-btn ${isCorrect ? "correct" : "wrong"}" id="continue-btn">CONTINUE</button>
@@ -948,6 +977,19 @@
         checkBtn.disabled = !canCheck;
         if (canCheck) checkBtn.onclick = handleCheck;
       }
+    }
+
+    function handleDontRemember() {
+      const item = queue[queueIndex];
+      const card = cards.find((c) => c.id === item.cardId);
+      if (!item || !card || isChecked) return;
+
+      isCorrect = false;
+      isTypo = false;
+      isChecked = true;
+      cardMistakes[card.id] = (cardMistakes[card.id] || 0) + 1;
+      playAudio(card);
+      render();
     }
 
     function handleCheck() {
