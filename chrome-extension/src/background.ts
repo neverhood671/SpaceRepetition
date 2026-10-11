@@ -175,16 +175,125 @@ async function parseWiktionarySwedishEntry(
   }
 }
 
+/**
+ * Accurately check if a part of speech string represents a Swedish verb or partikelverb.
+ * Explicitly guards against "adverb" which contains the substring "verb", and ensures
+ * partikelverb (phrasal verb) requires a multi-word phrase (e.g. "ha ihjäl", not "ihjäl" alone).
+ */
+export function isVerbPartOfSpeech(
+  pos: string | undefined,
+  lemma = ""
+): boolean {
+  if (!pos) return false;
+  const normalized = pos.trim().toLowerCase();
+  if (
+    normalized === "adverb" ||
+    normalized.startsWith("adverb") ||
+    normalized === "adv" ||
+    normalized === "verbpartikel" ||
+    normalized === "partikel"
+  ) {
+    return false;
+  }
+  if (normalized === "partikelverb") {
+    // If a lemma is provided, a partikelverb requires at least two words (e.g. "ha ihjäl", "hålla till").
+    // A standalone single token (e.g. "ihjäl") is a particle/adverb, never a verb on its own.
+    if (lemma && !lemma.trim().includes(" ")) {
+      return false;
+    }
+    return true;
+  }
+  return normalized === "verb" || /\bverb\b/i.test(normalized);
+}
+
+const SWEDISH_ADVERBIAL_PARTICLES = new Set([
+  "ihjäl",
+  "omkull",
+  "itur",
+  "itu",
+  "isär",
+  "ihop",
+  "ifrån",
+  "iväg",
+  "omkring",
+  "hän",
+  "tillhopa",
+  "tillhanda",
+  "åstad",
+  "undan",
+  "kvar",
+  "loss",
+  "ikapp",
+  "ihåg",
+  "sönder",
+  "samman",
+  "vilse"
+]);
+
+/**
+ * Check if a part of speech or Swedish word pattern indicates an adverb or verb particle.
+ */
+export function isAdverbPartOfSpeech(
+  pos: string | undefined,
+  lemma = ""
+): boolean {
+  const normalized = (pos || "").trim().toLowerCase();
+  if (
+    normalized === "adverb" ||
+    normalized.startsWith("adverb") ||
+    normalized === "adv" ||
+    normalized === "verbpartikel" ||
+    normalized === "partikel"
+  ) {
+    return true;
+  }
+  const cleanLemma = (lemma || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^att\s+/i, "");
+  if (SWEDISH_ADVERBIAL_PARTICLES.has(cleanLemma)) {
+    return true;
+  }
+  if (
+    cleanLemma.length > 5 &&
+    (cleanLemma.endsWith("ligen") || cleanLemma.endsWith("vis"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export async function parseWiktionarySection(
   lemma: string,
   svSection: string
 ): Promise<WiktionaryParseResult> {
   let partOfSpeech = "word";
-  if (/partikelverb|partikel=/i.test(svSection)) partOfSpeech = "partikelverb";
-  else if (/===Substantiv===/i.test(svSection)) partOfSpeech = "noun";
-  else if (/===Verb===/i.test(svSection)) partOfSpeech = "verb";
-  else if (/===Adjektiv===/i.test(svSection)) partOfSpeech = "adjective";
-  else if (/===Adverb===/i.test(svSection)) partOfSpeech = "adverb";
+  if (
+    lemma.trim().includes(" ") &&
+    (/===Partikelverb===|\(partikelverb\)/i.test(svSection) ||
+      /partikelverb/i.test(svSection))
+  ) {
+    partOfSpeech = "partikelverb";
+  } else if (
+    /===Verbpartikel===|\{\{verbpartikel/i.test(svSection) ||
+    /===Adverb===|\{\{adv\|sv\}\}/i.test(svSection)
+  ) {
+    partOfSpeech = "adverb";
+  } else if (/===Substantiv===|\{\{subst\|sv\}\}/i.test(svSection)) {
+    partOfSpeech = "noun";
+  } else if (/===Verb===|\{\{verb\|sv\}\}/i.test(svSection)) {
+    partOfSpeech = "verb";
+  } else if (/===Adjektiv===|\{\{adj\|sv\}\}/i.test(svSection)) {
+    partOfSpeech = "adjective";
+  } else if (/===Preposition===|\{\{prep\|sv\}\}/i.test(svSection)) {
+    partOfSpeech = "preposition";
+  } else if (/===Konjunktion===|\{\{konj\|sv\}\}/i.test(svSection)) {
+    partOfSpeech = "conjunction";
+  } else if (/===Pronomen===|\{\{pron\|sv\}\}/i.test(svSection)) {
+    partOfSpeech = "pronoun";
+  } else if (/===Interjektion===|\{\{interj\|sv\}\}/i.test(svSection)) {
+    partOfSpeech = "interjection";
+  }
 
   let article = "";
   if (partOfSpeech === "noun") {
@@ -685,14 +794,25 @@ export async function analyzeSwedishWord({
     baseGTrans = await queryGoogleTranslateDictionary(bareLemma, "");
   }
 
-  const partOfSpeech =
+  const detectedPartOfSpeech =
+    (finalWiki?.partOfSpeech && finalWiki.partOfSpeech !== "word"
+      ? finalWiki.partOfSpeech
+      : "") ||
     geminiData?.partOfSpeech ||
-    finalWiki?.partOfSpeech ||
     gTrans?.partOfSpeech ||
+    finalWiki?.partOfSpeech ||
     (/^att\s+/i.test(cleaned) ? "verb" : "word");
 
-  const isVerb = /verb/i.test(partOfSpeech) || /^att\s+/i.test(rawLemma);
-  const article = isVerb ? "" : geminiData?.article || finalWiki?.article || "";
+  const isAdverb = isAdverbPartOfSpeech(detectedPartOfSpeech, bareLemma);
+  const partOfSpeech = isAdverb ? "adverb" : detectedPartOfSpeech;
+
+  const isVerb =
+    !isAdverb &&
+    (isVerbPartOfSpeech(partOfSpeech, bareLemma) ||
+      /^att\s+/i.test(cleaned) ||
+      /^att\s+/i.test(rawLemma));
+
+  const article = isVerb || isAdverb ? "" : geminiData?.article || finalWiki?.article || "";
   const formattedLemma = isVerb ? `att ${bareLemma}` : bareLemma;
 
   const lemmaTranslation =

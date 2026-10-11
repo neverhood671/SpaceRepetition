@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import {
   SafeAreaView,
   StyleSheet,
@@ -9,7 +9,10 @@ import {
   ScrollView,
   TextInput,
   StatusBar,
-  ActivityIndicator
+  ActivityIndicator,
+  Modal,
+  KeyboardAvoidingView,
+  Platform
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
@@ -21,25 +24,43 @@ import {
   updateCardInCloud
 } from "./src/firestore";
 import { scheduleCard, previewIntervals, Rating } from "./src/fsrs";
+import {
+  ExerciseItem,
+  createLessonQueue,
+  isTranslationMatch
+} from "./src/learningFlow";
 
 const STORAGE_CARDS_KEY = "@svenska_spaced_cards_v1";
 const STORAGE_SETTINGS_KEY = "@svenska_spaced_settings_v1";
 
-type TabType = "review" | "deck" | "settings";
-type StudyMode = "auto" | "recognition" | "cloze";
-
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabType>("review");
   const [cards, setCards] = useState<VocabCard[]>(STARTER_SWEDISH_DECK);
   const [settings, setSettings] = useState<CloudSettings>({
     firebaseProjectId: "",
     firebaseApiKey: ""
   });
-  const [isRevealed, setIsRevealed] = useState(false);
-  const [studyMode, setStudyMode] = useState<StudyMode>("auto");
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
+  // Linear Exercise Session State
+  const [queue, setQueue] = useState<ExerciseItem[]>([]);
+  const [queueIndex, setQueueIndex] = useState(0);
+  const [completedCount, setCompletedCount] = useState(0);
+  const [initialTotal, setInitialTotal] = useState(0);
+
+  // Current Exercise Interaction State
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [typedAnswer, setTypedAnswer] = useState("");
+  const [isChecked, setIsChecked] = useState(false);
+  const [isCorrect, setIsCorrect] = useState(false);
+  const [isTypo, setIsTypo] = useState(false);
+  const [cardMistakes, setCardMistakes] = useState<Record<string, number>>({});
+  const [sessionCompleted, setSessionCompleted] = useState(false);
+
+  const textInputRef = useRef<TextInput>(null);
+
+  // 1. Initial Storage & Firestore Load
   useEffect(() => {
     (async () => {
       try {
@@ -47,24 +68,59 @@ export default function App() {
           AsyncStorage.getItem(STORAGE_CARDS_KEY),
           AsyncStorage.getItem(STORAGE_SETTINGS_KEY)
         ]);
+
+        let loadedCards = STARTER_SWEDISH_DECK;
         if (savedCardsRaw) {
           const parsed = JSON.parse(savedCardsRaw);
           if (Array.isArray(parsed) && parsed.length > 0) {
+            loadedCards = parsed;
             setCards(parsed);
           }
         }
+
         if (savedSettingsRaw) {
           const parsedCfg = JSON.parse(savedSettingsRaw);
           setSettings(parsedCfg);
           if (parsedCfg.firebaseProjectId) {
-            syncWithFirestore(parsedCfg, savedCardsRaw ? JSON.parse(savedCardsRaw) : STARTER_SWEDISH_DECK);
+            syncWithFirestore(parsedCfg, loadedCards);
           }
         }
+
+        // Initialize linear lesson queue
+        startNewLesson(loadedCards);
       } catch (e) {
         console.warn("Storage load error:", e);
       }
     })();
   }, []);
+
+  function startNewLesson(deck: VocabCard[]) {
+    const nowIso = new Date().toISOString();
+    let due = deck.filter((c) => !c.fsrs?.due || c.fsrs.due <= nowIso);
+    if (due.length === 0) {
+      due = deck; // If all caught up, practice all cards in deck
+    }
+    // Limit to batch of 4 cards per lesson for ideal micro-learning chunk
+    const lessonBatch = due.slice(0, 4);
+    const newQueue = createLessonQueue(lessonBatch, deck);
+
+    setQueue(newQueue);
+    setQueueIndex(0);
+    setCompletedCount(0);
+    setInitialTotal(newQueue.length);
+    setSelectedOption(null);
+    setTypedAnswer("");
+    setIsChecked(false);
+    setIsCorrect(false);
+    setIsTypo(false);
+    setCardMistakes({});
+    setSessionCompleted(false);
+
+    if (newQueue.length > 0) {
+      const firstCard = deck.find((c) => c.id === newQueue[0].cardId);
+      if (firstCard) playSwedishAudio(firstCard);
+    }
+  }
 
   async function syncWithFirestore(cfg: CloudSettings, currentCards: VocabCard[]) {
     if (!cfg.firebaseProjectId?.trim()) return;
@@ -81,7 +137,7 @@ export default function App() {
         await AsyncStorage.setItem(STORAGE_CARDS_KEY, JSON.stringify(merged));
         setSyncMessage(`✓ Synced ${cloudCards.length} cards from Firestore`);
       } else {
-        setSyncMessage("Connected to Firestore (0 cloud cards yet)");
+        setSyncMessage("Connected to Firestore (0 cloud cards)");
       }
     } catch (err: any) {
       setSyncMessage(`⚠️ Sync error: ${err.message || String(err)}`);
@@ -90,7 +146,8 @@ export default function App() {
     }
   }
 
-  async function playSwedishAudio(card: VocabCard) {
+  async function playSwedishAudio(card?: VocabCard | null) {
+    if (!card) return;
     const uri = card.media?.audioBase64 || card.media?.audioUrl;
     if (!uri) return;
     try {
@@ -108,415 +165,583 @@ export default function App() {
     }
   }
 
-  // Filter cards that are due right now
-  const dueCards = useMemo(() => {
-    const nowIso = new Date().toISOString();
-    return cards
-      .filter((c) => !c.fsrs?.due || c.fsrs.due <= nowIso)
-      .sort((a, b) => (a.fsrs?.due || "").localeCompare(b.fsrs?.due || ""));
-  }, [cards]);
+  const currentExercise: ExerciseItem | null = queue[queueIndex] || null;
+  const currentCard: VocabCard | null = useMemo(() => {
+    if (!currentExercise) return null;
+    return cards.find((c) => c.id === currentExercise.cardId) || null;
+  }, [currentExercise, cards]);
 
-  const currentCard = dueCards[0] || null;
+  // Handle Level 1 tap: immediately selects and checks
+  function handleSelectStage1(opt: string) {
+    if (isChecked) return;
+    setSelectedOption(opt);
+    setIsChecked(true);
+    setIsCorrect(true);
+    setIsTypo(false);
+    if (currentCard) playSwedishAudio(currentCard);
+  }
 
-  // Determine whether current card uses Recognition or Active Recall (Cloze)
-  const effectiveMode = useMemo(() => {
-    if (!currentCard) return "recognition";
-    if (studyMode !== "auto") return studyMode;
-    // Educational tactic: Use Recognition for new cards, switch to Cloze Active Recall once Stability >= 2 days
-    return (currentCard.fsrs?.stability || 0) >= 2 ? "cloze" : "recognition";
-  }, [currentCard, studyMode]);
+  // Handle Level 2 option selection
+  function handleSelectStage2(opt: string) {
+    if (isChecked) return;
+    setSelectedOption(opt);
+  }
 
-  const intervals = useMemo(() => {
-    return previewIntervals(currentCard?.fsrs);
-  }, [currentCard]);
+  // Check the answer (for Level 2 multiple choice or Level 3 keyboard input)
+  function handleCheckAnswer() {
+    if (!currentExercise || !currentCard || isChecked) return;
 
-  async function handleRate(rating: Rating) {
-    if (!currentCard) return;
-    const { nextState } = scheduleCard(currentCard.fsrs, rating, new Date());
-    const updatedCard: VocabCard = {
-      ...currentCard,
-      fsrs: nextState
-    };
+    if (currentExercise.stage === "select_4") {
+      if (!selectedOption) return;
+      const target = currentCard.english.lemmaTranslation.trim().toLowerCase();
+      const chosen = selectedOption.trim().toLowerCase();
+      const correct = chosen === target;
 
-    const nextDeck = cards.map((c) => (c.id === updatedCard.id ? updatedCard : c));
-    setCards(nextDeck);
-    setIsRevealed(false);
-    await AsyncStorage.setItem(STORAGE_CARDS_KEY, JSON.stringify(nextDeck));
+      setIsChecked(true);
+      setIsCorrect(correct);
+      setIsTypo(false);
 
-    if (settings.firebaseProjectId?.trim()) {
-      updateCardInCloud(updatedCard, settings).catch((e) =>
-        console.warn("Cloud update failed:", e)
+      if (!correct) {
+        setCardMistakes((prev) => ({
+          ...prev,
+          [currentCard.id]: (prev[currentCard.id] || 0) + 1
+        }));
+      } else {
+        playSwedishAudio(currentCard);
+      }
+    } else if (currentExercise.stage === "keyboard") {
+      if (!typedAnswer.trim()) return;
+      const matchResult = isTranslationMatch(
+        typedAnswer,
+        currentCard.english.lemmaTranslation,
+        currentCard.english.contextualTranslation
       );
+
+      setIsChecked(true);
+      setIsCorrect(matchResult.isMatch);
+      setIsTypo(matchResult.isTypo);
+
+      if (!matchResult.isMatch) {
+        setCardMistakes((prev) => ({
+          ...prev,
+          [currentCard.id]: (prev[currentCard.id] || 0) + 1
+        }));
+      } else {
+        playSwedishAudio(currentCard);
+      }
     }
   }
 
-  function renderClozeSentence(sentence?: string, surface?: string, lemma?: string) {
-    if (!sentence) return "—";
-    const target = surface || lemma || "";
-    if (!target) return sentence;
-    const regex = new RegExp(target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-    if (regex.test(sentence)) {
-      return sentence.replace(regex, "[ ______ ]");
+  // Advance to the next exercise in the linear flow
+  async function handleContinue() {
+    if (!currentExercise || !currentCard) return;
+
+    let nextQueue = [...queue];
+
+    if (!isCorrect) {
+      // Re-queue the failed exercise at the end of the queue so the user masters it
+      nextQueue.push({
+        ...currentExercise,
+        mistakes: currentExercise.mistakes + 1
+      });
+    } else {
+      setCompletedCount((c) => c + 1);
+
+      // If this was the final keyboard production stage, schedule card in FSRS
+      if (currentExercise.stage === "keyboard") {
+        const mistakes = cardMistakes[currentCard.id] || 0;
+        const rating: Rating = mistakes === 0 ? 3 : mistakes === 1 ? 2 : 1;
+        const { nextState } = scheduleCard(currentCard.fsrs, rating, new Date());
+        const updatedCard: VocabCard = { ...currentCard, fsrs: nextState };
+
+        const nextCards = cards.map((c) => (c.id === updatedCard.id ? updatedCard : c));
+        setCards(nextCards);
+        await AsyncStorage.setItem(STORAGE_CARDS_KEY, JSON.stringify(nextCards));
+
+        if (settings.firebaseProjectId?.trim()) {
+          updateCardInCloud(updatedCard, settings).catch((e) =>
+            console.warn("Cloud update failed:", e)
+          );
+        }
+      }
     }
-    return sentence;
+
+    const nextIndex = queueIndex + 1;
+    if (nextIndex >= nextQueue.length) {
+      // All exercises completed!
+      setSessionCompleted(true);
+      setQueue([]);
+      setQueueIndex(0);
+    } else {
+      setQueue(nextQueue);
+      setQueueIndex(nextIndex);
+      setSelectedOption(null);
+      setTypedAnswer("");
+      setIsChecked(false);
+      setIsCorrect(false);
+      setIsTypo(false);
+
+      const nextItem = nextQueue[nextIndex];
+      const nextCardObj = cards.find((c) => c.id === nextItem.cardId);
+      if (nextCardObj) playSwedishAudio(nextCardObj);
+    }
   }
 
-  function getGenderColors(article?: string) {
-    if (article === "en") return { bg: "#0284c7", badgeBg: "#bae6fd", badgeText: "#0369a1" };
-    if (article === "ett") return { bg: "#16a34a", badgeBg: "#bbf7d0", badgeText: "#15803d" };
-    return { bg: "#005B99", badgeBg: "#fef08a", badgeText: "#854d0e" };
+  function getBannerColor(article?: string) {
+    if (article === "en") return "#0284c7";
+    if (article === "ett") return "#16a34a";
+    return "#005B99";
   }
+
+  const progressPercent = useMemo(() => {
+    if (initialTotal <= 0) return 100;
+    return Math.min(100, Math.round((completedCount / initialTotal) * 100));
+  }, [completedCount, initialTotal]);
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#004270" />
 
-      {/* Header */}
+      {/* TOP HEADER: Duolingo Linear Progress Bar */}
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.brandTitle}>🇸🇪 SvenskaSpaced</Text>
-          <View style={styles.statsPill}>
-            <Text style={styles.statsPillText}>
-              Due: {dueCards.length} / {cards.length}
-            </Text>
-          </View>
+          <TouchableOpacity
+            style={styles.settingsIconBtn}
+            onPress={() => setShowSettingsModal(true)}
+          >
+            <Text style={{ fontSize: 18 }}>⚙️</Text>
+          </TouchableOpacity>
         </View>
 
-        <View style={styles.navBar}>
-          {(["review", "deck", "settings"] as TabType[]).map((tab) => (
-            <TouchableOpacity
-              key={tab}
-              style={[styles.navBtn, activeTab === tab && styles.navBtnActive]}
-              onPress={() => setActiveTab(tab)}
-            >
-              <Text
-                style={[
-                  styles.navBtnText,
-                  activeTab === tab && styles.navBtnTextActive
-                ]}
-              >
-                {tab === "review"
-                  ? `🎯 Review (${dueCards.length})`
-                  : tab === "deck"
-                  ? `📚 Words (${cards.length})`
-                  : "☁️ Cloud Sync"}
-              </Text>
-            </TouchableOpacity>
-          ))}
+        {/* Linear Progress Bar */}
+        <View style={styles.progressBarBackground}>
+          <View
+            style={[styles.progressBarFill, { width: `${progressPercent}%` }]}
+          />
         </View>
+        <Text style={styles.progressSubtext}>
+          {sessionCompleted
+            ? "100% Complete"
+            : `Exercise ${Math.min(completedCount + 1, initialTotal)} of ${initialTotal}`}
+        </Text>
       </View>
 
-      {/* TAB 1: SPACED REPETITION FLASHCARD REVIEW */}
-      {activeTab === "review" && (
-        <ScrollView contentContainerStyle={styles.mainContent}>
-          {/* Study Mode Selector */}
-          <View style={styles.modeRow}>
-            {(["auto", "recognition", "cloze"] as StudyMode[]).map((m) => (
-              <TouchableOpacity
-                key={m}
-                style={[styles.modeChip, studyMode === m && styles.modeChipActive]}
-                onPress={() => setStudyMode(m)}
+      {/* MAIN EXERCISE BODY */}
+      {sessionCompleted ? (
+        <ScrollView contentContainerStyle={styles.centerContainer}>
+          <View style={styles.completeCard}>
+            <Text style={styles.celebrateEmoji}>🎉</Text>
+            <Text style={styles.completeTitle}>Bra jobbat!</Text>
+            <Text style={styles.completeSubtitle}>
+              You have completed all 3 levels (1-choice introduction, 4-choice discrimination, and keyboard recall) for your due Swedish cards!
+            </Text>
+
+            <TouchableOpacity
+              style={styles.duoPrimaryBtn}
+              onPress={() => startNewLesson(cards)}
+            >
+              <Text style={styles.duoPrimaryBtnText}>↻ Practice Again</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.duoSecondaryBtn, { marginTop: 12 }]}
+              onPress={() => setShowSettingsModal(true)}
+            >
+              <Text style={styles.duoSecondaryBtnText}>📚 View Word Deck & Sync</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      ) : !currentCard || !currentExercise ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color="#005B99" />
+        </View>
+      ) : (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1 }}
+        >
+          <ScrollView contentContainerStyle={styles.exerciseContent}>
+            {/* Level Badge & Instructions */}
+            <View style={styles.instructionRow}>
+              <View
+                style={[
+                  styles.levelPill,
+                  {
+                    backgroundColor:
+                      currentExercise.stageNumber === 1
+                        ? "#e0f2fe"
+                        : currentExercise.stageNumber === 2
+                        ? "#fef3c7"
+                        : "#dcfce7"
+                  }
+                ]}
               >
                 <Text
                   style={[
-                    styles.modeChipText,
-                    studyMode === m && styles.modeChipTextActive
+                    styles.levelPillText,
+                    {
+                      color:
+                        currentExercise.stageNumber === 1
+                          ? "#0369a1"
+                          : currentExercise.stageNumber === 2
+                          ? "#b45309"
+                          : "#15803d"
+                    }
                   ]}
                 >
-                  {m === "auto"
-                    ? "🧠 Smart FSRS Mode"
-                    : m === "recognition"
-                    ? "🇸🇪→🇬🇧 Recognition"
-                    : "🖼️→🇸🇪 Cloze Recall"}
+                  {currentExercise.stageNumber === 1
+                    ? "LEVEL 1 • 1 OPTION"
+                    : currentExercise.stageNumber === 2
+                    ? "LEVEL 2 • 4 CHOICES"
+                    : "LEVEL 3 • TYPE FROM KEYBOARD"}
                 </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+              </View>
 
-          {!currentCard ? (
-            <View style={styles.doneCard}>
-              <Text style={styles.doneEmoji}>🎉</Text>
-              <Text style={styles.doneTitle}>Bra jobbat! All caught up!</Text>
-              <Text style={styles.doneSubtitle}>
-                You have reviewed all due Swedish words for now. Highlight new words in Chrome or reset a card to practice again.
+              <Text style={styles.instructionText}>
+                {currentExercise.stage === "select_1"
+                  ? "Tap to confirm the translation:"
+                  : currentExercise.stage === "select_4"
+                  ? "Select the correct translation:"
+                  : "Type the translation in English:"}
               </Text>
-              <TouchableOpacity
-                style={styles.primaryBtn}
-                onPress={() => {
-                  const reset = cards.map((c) => ({
-                    ...c,
-                    fsrs: { ...c.fsrs, due: new Date().toISOString() }
-                  }));
-                  setCards(reset);
-                }}
-              >
-                <Text style={styles.primaryBtnText}>↻ Practice All Cards Now</Text>
-              </TouchableOpacity>
             </View>
-          ) : (
-            <View style={styles.flashcard}>
-              {/* Card Top Bar */}
+
+            {/* Prompt Card */}
+            <View style={styles.promptCard}>
               <View
                 style={[
-                  styles.cardBanner,
-                  { backgroundColor: getGenderColors(currentCard.swedish.article).bg }
+                  styles.promptBanner,
+                  {
+                    backgroundColor: getBannerColor(currentCard.swedish.article)
+                  }
                 ]}
               >
-                <View style={styles.genderBadge}>
-                  <Text style={styles.genderBadgeText}>
-                    {currentCard.swedish.article
-                      ? `${currentCard.swedish.article.toUpperCase()}-ORD`
-                      : currentCard.swedish.partOfSpeech.toUpperCase()}
-                  </Text>
-                </View>
-                <Text style={styles.cardMetaText}>
-                  S: {currentCard.fsrs?.stability || 0}d • Reps: {currentCard.fsrs?.reps || 0}
+                <Text style={styles.bannerGenderText}>
+                  {currentCard.swedish.article
+                    ? `${currentCard.swedish.article.toUpperCase()}-ORD`
+                    : currentCard.swedish.partOfSpeech.toUpperCase()}
                 </Text>
+                <TouchableOpacity
+                  style={styles.speakerPill}
+                  onPress={() => playSwedishAudio(currentCard)}
+                >
+                  <Text style={styles.speakerPillText}>🔊 Pronunciation</Text>
+                </TouchableOpacity>
               </View>
 
-              <View style={styles.cardBody}>
-                {effectiveMode === "recognition" ? (
-                  <>
-                    {/* FRONT: SWEDISH WORD + AUDIO + CONTEXT */}
-                    <Text style={styles.swedishPrompt}>
-                      {currentCard.swedish.article
-                        ? `${currentCard.swedish.article} ${currentCard.swedish.lemma}`
-                        : currentCard.swedish.lemma}
+              <View style={styles.promptBody}>
+                {currentCard.media?.imageUrl ? (
+                  <Image
+                    source={{ uri: currentCard.media.imageUrl }}
+                    style={styles.promptImage}
+                    resizeMode="cover"
+                  />
+                ) : null}
+
+                <Text style={styles.swedishWordText}>
+                  {currentCard.swedish.article
+                    ? `${currentCard.swedish.article} ${currentCard.swedish.lemma}`
+                    : currentCard.swedish.lemma}
+                </Text>
+
+                {currentCard.swedish.contextSentence ? (
+                  <View style={styles.contextBubble}>
+                    <Text style={styles.contextSentenceText}>
+                      ”{currentCard.swedish.contextSentence}”
                     </Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
 
+            {/* LEVEL 1: SINGLE OPTION CONFIRMATION */}
+            {currentExercise.stage === "select_1" && (
+              <View style={styles.optionsContainer}>
+                {currentExercise.options.map((opt, idx) => {
+                  const isChosen = selectedOption === opt;
+                  return (
                     <TouchableOpacity
-                      style={styles.audioButton}
-                      onPress={() => playSwedishAudio(currentCard)}
+                      key={idx}
+                      style={[
+                        styles.optionCard,
+                        isChosen && styles.optionCardCorrect
+                      ]}
+                      onPress={() => handleSelectStage1(opt)}
+                      activeOpacity={0.8}
                     >
-                      <Text style={styles.audioButtonText}>
-                        🔊 Play Native Pronunciation
-                      </Text>
-                    </TouchableOpacity>
-
-                    {currentCard.swedish.contextSentence ? (
-                      <View style={styles.contextQuote}>
-                        <Text style={styles.contextSvText}>
-                          ”{currentCard.swedish.contextSentence}”
+                      <View style={[styles.optionKeyCircle, isChosen && styles.optionKeyCircleCorrect]}>
+                        <Text style={[styles.optionKeyText, isChosen && styles.optionKeyTextCorrect]}>
+                          1
                         </Text>
                       </View>
-                    ) : null}
-                  </>
-                ) : (
-                  <>
-                    {/* FRONT (CLOZE ACTIVE RECALL): IMAGE + ENGLISH + CLOZE BLANK */}
-                    {currentCard.media.imageUrl ? (
-                      <Image
-                        source={{ uri: currentCard.media.imageUrl }}
-                        style={styles.cardImage}
-                        resizeMode="cover"
-                      />
-                    ) : null}
-                    <Text style={styles.englishPrompt}>
+                      <Text
+                        style={[
+                          styles.optionTitle,
+                          isChosen && styles.optionTitleCorrect
+                        ]}
+                      >
+                        {opt}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* LEVEL 2: 4 OPTIONS MULTIPLE CHOICE */}
+            {currentExercise.stage === "select_4" && (
+              <View style={styles.optionsContainer}>
+                {currentExercise.options.map((opt, idx) => {
+                  const isSelected = selectedOption === opt;
+                  const isTarget =
+                    opt.trim().toLowerCase() ===
+                    currentCard.english.lemmaTranslation.trim().toLowerCase();
+
+                  let cardStyle = styles.optionCard;
+                  let keyCircleStyle = styles.optionKeyCircle;
+                  let keyTextStyle = styles.optionKeyText;
+                  let titleStyle = styles.optionTitle;
+
+                  if (isChecked) {
+                    if (isTarget) {
+                      cardStyle = styles.optionCardCorrect;
+                      keyCircleStyle = styles.optionKeyCircleCorrect;
+                      keyTextStyle = styles.optionKeyTextCorrect;
+                      titleStyle = styles.optionTitleCorrect;
+                    } else if (isSelected && !isTarget) {
+                      cardStyle = styles.optionCardWrong;
+                      keyCircleStyle = styles.optionKeyCircleWrong;
+                      keyTextStyle = styles.optionKeyTextWrong;
+                      titleStyle = styles.optionTitleWrong;
+                    }
+                  } else if (isSelected) {
+                    cardStyle = styles.optionCardSelected;
+                    keyCircleStyle = styles.optionKeyCircleSelected;
+                    keyTextStyle = styles.optionKeyTextSelected;
+                    titleStyle = styles.optionTitleSelected;
+                  }
+
+                  return (
+                    <TouchableOpacity
+                      key={idx}
+                      style={cardStyle}
+                      onPress={() => handleSelectStage2(opt)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={keyCircleStyle}>
+                        <Text style={keyTextStyle}>{idx + 1}</Text>
+                      </View>
+                      <Text style={titleStyle}>{opt}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* LEVEL 3: KEYBOARD PRODUCTION ENTRY */}
+            {currentExercise.stage === "keyboard" && (
+              <View style={styles.keyboardContainer}>
+                <TextInput
+                  ref={textInputRef}
+                  style={[
+                    styles.keyboardInput,
+                    isChecked && isCorrect && styles.keyboardInputCorrect,
+                    isChecked && !isCorrect && styles.keyboardInputWrong
+                  ]}
+                  placeholder="Type translation in English..."
+                  placeholderTextColor="#94a3b8"
+                  value={typedAnswer}
+                  onChangeText={setTypedAnswer}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!isChecked}
+                  onSubmitEditing={handleCheckAnswer}
+                  returnKeyType="done"
+                  autoFocus
+                />
+              </View>
+            )}
+          </ScrollView>
+
+          {/* BOTTOM DUOLINGO ACTION BAR & FEEDBACK SHEET */}
+          <View
+            style={[
+              styles.bottomBar,
+              isChecked && (isCorrect ? styles.bottomBarCorrect : styles.bottomBarWrong)
+            ]}
+          >
+            {isChecked ? (
+              <View style={styles.feedbackContainer}>
+                <View style={styles.feedbackHeaderRow}>
+                  <Text
+                    style={[
+                      styles.feedbackTitle,
+                      { color: isCorrect ? "#15803d" : "#b91c1c" }
+                    ]}
+                  >
+                    {isCorrect
+                      ? isTypo
+                        ? "✓ Good (Minor typo accepted)!"
+                        : "✓ Excellent / Rätt!"
+                      : "✗ Not quite!"}
+                  </Text>
+                </View>
+
+                {!isCorrect ? (
+                  <Text style={styles.feedbackExpectedText}>
+                    Correct translation:{" "}
+                    <Text style={{ fontWeight: "800" }}>
                       {currentCard.english.lemmaTranslation}
                     </Text>
-                    <View style={styles.contextQuote}>
-                      <Text style={styles.contextSvText}>
-                        ”
-                        {renderClozeSentence(
-                          currentCard.swedish.contextSentence,
-                          currentCard.swedish.surfaceForm,
-                          currentCard.swedish.lemma
-                        )}
-                        ”
-                      </Text>
-                    </View>
-                  </>
-                )}
+                  </Text>
+                ) : currentCard.swedish.inflections ? (
+                  <Text style={styles.feedbackMetaText}>
+                    Forms: {currentCard.swedish.inflections}
+                  </Text>
+                ) : null}
 
-                {!isRevealed ? (
-                  <TouchableOpacity
-                    style={styles.revealBtn}
-                    onPress={() => {
-                      setIsRevealed(true);
-                      playSwedishAudio(currentCard);
-                    }}
-                  >
-                    <Text style={styles.revealBtnText}>👀 Show Answer & Audio</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <View style={styles.answerSection}>
-                    <View style={styles.divider} />
-
-                    {effectiveMode === "recognition" && currentCard.media.imageUrl ? (
-                      <Image
-                        source={{ uri: currentCard.media.imageUrl }}
-                        style={styles.cardImage}
-                        resizeMode="cover"
-                      />
-                    ) : null}
-
-                    <Text style={styles.answerHeadline}>
-                      {effectiveMode === "recognition"
-                        ? currentCard.english.lemmaTranslation
-                        : `${
-                            currentCard.swedish.article
-                              ? currentCard.swedish.article + " "
-                              : ""
-                          }${currentCard.swedish.lemma}`}
-                    </Text>
-
-                    {currentCard.swedish.inflections ? (
-                      <Text style={styles.inflectionsText}>
-                        Forms: {currentCard.swedish.inflections}
-                      </Text>
-                    ) : null}
-
-                    {currentCard.swedish.definitionSv ? (
-                      <Text style={styles.definitionText}>
-                        🇸🇪 Ordbok: {currentCard.swedish.definitionSv}
-                      </Text>
-                    ) : null}
-
-                    {currentCard.english.sentenceTranslation ? (
-                      <Text style={styles.sentenceTransText}>
-                        🇬🇧 ”{currentCard.english.sentenceTranslation}”
-                      </Text>
-                    ) : null}
-
-                    {/* 4 FSRS Rating Buttons */}
-                    <View style={styles.ratingRow}>
-                      <TouchableOpacity
-                        style={[styles.rateBtn, { backgroundColor: "#ef4444" }]}
-                        onPress={() => handleRate(1)}
-                      >
-                        <Text style={styles.rateInterval}>{intervals[1]}</Text>
-                        <Text style={styles.rateLabel}>Again</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.rateBtn, { backgroundColor: "#f59e0b" }]}
-                        onPress={() => handleRate(2)}
-                      >
-                        <Text style={styles.rateInterval}>{intervals[2]}</Text>
-                        <Text style={styles.rateLabel}>Hard</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.rateBtn, { backgroundColor: "#10b981" }]}
-                        onPress={() => handleRate(3)}
-                      >
-                        <Text style={styles.rateInterval}>{intervals[3]}</Text>
-                        <Text style={styles.rateLabel}>Good</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.rateBtn, { backgroundColor: "#0284c7" }]}
-                        onPress={() => handleRate(4)}
-                      >
-                        <Text style={styles.rateInterval}>{intervals[4]}</Text>
-                        <Text style={styles.rateLabel}>Easy</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
+                <TouchableOpacity
+                  style={[
+                    styles.continueBtn,
+                    { backgroundColor: isCorrect ? "#22c55e" : "#ef4444" }
+                  ]}
+                  onPress={handleContinue}
+                >
+                  <Text style={styles.continueBtnText}>CONTINUE</Text>
+                </TouchableOpacity>
               </View>
-            </View>
-          )}
-        </ScrollView>
-      )}
-
-      {/* TAB 2: SAVED VOCABULARY DECK */}
-      {activeTab === "deck" && (
-        <ScrollView contentContainerStyle={styles.mainContent}>
-          {cards.map((card) => (
-            <View key={card.id} style={styles.deckItem}>
-              {card.media.imageUrl ? (
-                <Image
-                  source={{ uri: card.media.imageUrl }}
-                  style={styles.deckThumb}
-                />
-              ) : (
-                <View style={styles.deckThumbPlaceholder}>
-                  <Text style={{ fontSize: 22 }}>🇸🇪</Text>
-                </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.deckWordSv}>
-                  {card.swedish.article ? `${card.swedish.article} ` : ""}
-                  {card.swedish.lemma}
-                </Text>
-                <Text style={styles.deckWordEn}>
-                  {card.english.lemmaTranslation}
-                </Text>
-                <Text style={styles.deckWordMeta}>
-                  Stability: {card.fsrs?.stability || 0}d • Reps: {card.fsrs?.reps || 0}
-                </Text>
-              </View>
+            ) : (
               <TouchableOpacity
-                style={styles.deckAudioBtn}
-                onPress={() => playSwedishAudio(card)}
+                style={[
+                  styles.checkBtn,
+                  (currentExercise.stage === "select_1" ||
+                    (currentExercise.stage === "select_4" && selectedOption) ||
+                    (currentExercise.stage === "keyboard" && typedAnswer.trim()))
+                    ? styles.checkBtnActive
+                    : styles.checkBtnDisabled
+                ]}
+                onPress={handleCheckAnswer}
+                disabled={
+                  currentExercise.stage === "select_4"
+                    ? !selectedOption
+                    : currentExercise.stage === "keyboard"
+                    ? !typedAnswer.trim()
+                    : true
+                }
               >
-                <Text style={{ fontSize: 18 }}>🔊</Text>
-              </TouchableOpacity>
-            </View>
-          ))}
-        </ScrollView>
-      )}
-
-      {/* TAB 3: CLOUD FIRESTORE SETTINGS */}
-      {activeTab === "settings" && (
-        <ScrollView contentContainerStyle={styles.mainContent}>
-          <View style={styles.settingsCard}>
-            <Text style={styles.settingsTitle}>
-              ☁️ Firebase Cloud Firestore Sync
-            </Text>
-            <Text style={styles.settingsSubtitle}>
-              Enter the same Firebase Project ID configured in your Chrome Extension to fetch saved Swedish words and sync FSRS review intervals.
-            </Text>
-
-            <Text style={styles.inputLabel}>Firebase Project ID</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="e.g. svenska-vocab-12345"
-              value={settings.firebaseProjectId}
-              onChangeText={(text) =>
-                setSettings((s) => ({ ...s, firebaseProjectId: text }))
-              }
-              autoCapitalize="none"
-            />
-
-            <Text style={styles.inputLabel}>Firebase Web API Key (Optional)</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="AIzaSy..."
-              value={settings.firebaseApiKey}
-              onChangeText={(text) =>
-                setSettings((s) => ({ ...s, firebaseApiKey: text }))
-              }
-              autoCapitalize="none"
-              secureTextEntry
-            />
-
-            <TouchableOpacity
-              style={styles.primaryBtn}
-              onPress={async () => {
-                await AsyncStorage.setItem(
-                  STORAGE_SETTINGS_KEY,
-                  JSON.stringify(settings)
-                );
-                await syncWithFirestore(settings, cards);
-              }}
-            >
-              {syncing ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.primaryBtnText}>
-                  ☁️ Save & Sync with Firestore Now
+                <Text
+                  style={[
+                    styles.checkBtnText,
+                    (currentExercise.stage === "select_1" ||
+                      (currentExercise.stage === "select_4" && selectedOption) ||
+                      (currentExercise.stage === "keyboard" && typedAnswer.trim()))
+                      ? styles.checkBtnTextActive
+                      : styles.checkBtnTextDisabled
+                  ]}
+                >
+                  CHECK
                 </Text>
-              )}
-            </TouchableOpacity>
-
-            {syncMessage ? (
-              <Text style={styles.syncStatusText}>{syncMessage}</Text>
-            ) : null}
+              </TouchableOpacity>
+            )}
           </View>
-        </ScrollView>
+        </KeyboardAvoidingView>
       )}
+
+      {/* SETTINGS & CLOUD SYNC MODAL */}
+      <Modal visible={showSettingsModal} animationType="slide">
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>⚙️ Settings & Vocabulary</Text>
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setShowSettingsModal(false)}
+            >
+              <Text style={{ fontSize: 18, fontWeight: "700" }}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView contentContainerStyle={styles.modalContent}>
+            {/* Firestore Cloud Sync */}
+            <View style={styles.settingsSection}>
+              <Text style={styles.sectionHeading}>☁️ Firestore Sync</Text>
+              <Text style={styles.sectionDesc}>
+                Enter the Firebase Project ID from your Chrome Extension to sync captured Swedish words.
+              </Text>
+
+              <Text style={styles.inputLabel}>Firebase Project ID</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. svenska-vocab-12345"
+                value={settings.firebaseProjectId}
+                onChangeText={(t) =>
+                  setSettings((s) => ({ ...s, firebaseProjectId: t }))
+                }
+                autoCapitalize="none"
+              />
+
+              <Text style={styles.inputLabel}>Web API Key (Optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="AIzaSy..."
+                value={settings.firebaseApiKey}
+                onChangeText={(t) =>
+                  setSettings((s) => ({ ...s, firebaseApiKey: t }))
+                }
+                autoCapitalize="none"
+                secureTextEntry
+              />
+
+              <TouchableOpacity
+                style={styles.duoPrimaryBtn}
+                onPress={async () => {
+                  await AsyncStorage.setItem(
+                    STORAGE_SETTINGS_KEY,
+                    JSON.stringify(settings)
+                  );
+                  await syncWithFirestore(settings, cards);
+                }}
+              >
+                {syncing ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.duoPrimaryBtnText}>Save & Sync Now</Text>
+                )}
+              </TouchableOpacity>
+
+              {syncMessage ? (
+                <Text style={styles.syncStatusMsg}>{syncMessage}</Text>
+              ) : null}
+            </View>
+
+            {/* Deck List */}
+            <View style={styles.settingsSection}>
+              <Text style={styles.sectionHeading}>
+                📚 Saved Words ({cards.length})
+              </Text>
+              {cards.map((c) => (
+                <View key={c.id} style={styles.wordRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.wordRowSv}>
+                      {c.swedish.article ? `${c.swedish.article} ` : ""}
+                      {c.swedish.lemma}
+                    </Text>
+                    <Text style={styles.wordRowEn}>
+                      {c.english.lemmaTranslation}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.wordRowAudioBtn}
+                    onPress={() => playSwedishAudio(c)}
+                  >
+                    <Text style={{ fontSize: 18 }}>🔊</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -524,271 +749,334 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f1f5f9"
+    backgroundColor: "#f8fafc"
   },
   header: {
     backgroundColor: "#005B99",
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 10
+    paddingTop: 8,
+    paddingBottom: 12
   },
   headerTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 10
+    marginBottom: 8
   },
   brandTitle: {
     color: "#ffffff",
-    fontSize: 20,
+    fontSize: 19,
     fontWeight: "800"
   },
-  statsPill: {
+  settingsIconBtn: {
     backgroundColor: "rgba(255,255,255,0.18)",
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 5,
+    borderRadius: 8
+  },
+  progressBarBackground: {
+    height: 10,
+    backgroundColor: "rgba(255,255,255,0.25)",
+    borderRadius: 999,
+    overflow: "hidden"
+  },
+  progressBarFill: {
+    height: "100%",
+    backgroundColor: "#FECC02",
     borderRadius: 999
   },
-  statsPillText: {
-    color: "#ffffff",
-    fontSize: 12,
-    fontWeight: "700"
+  progressSubtext: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 4,
+    textAlign: "right"
   },
-  navBar: {
-    flexDirection: "row",
-    gap: 8
+  exerciseContent: {
+    padding: 16,
+    paddingBottom: 24
   },
-  navBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    alignItems: "center"
-  },
-  navBtnActive: {
-    backgroundColor: "#FECC02"
-  },
-  navBtnText: {
-    color: "rgba(255,255,255,0.9)",
-    fontSize: 12,
-    fontWeight: "600"
-  },
-  navBtnTextActive: {
-    color: "#0f172a",
-    fontWeight: "800"
-  },
-  mainContent: {
-    padding: 16
-  },
-  modeRow: {
-    flexDirection: "row",
-    gap: 6,
+  instructionRow: {
     marginBottom: 12
   },
-  modeChip: {
-    flex: 1,
-    paddingVertical: 6,
+  levelPill: {
+    alignSelf: "flex-start",
     paddingHorizontal: 8,
-    backgroundColor: "#e2e8f0",
-    borderRadius: 8,
-    alignItems: "center"
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 6
   },
-  modeChipActive: {
-    backgroundColor: "#005B99"
+  levelPillText: {
+    fontSize: 10.5,
+    fontWeight: "800",
+    letterSpacing: 0.5
   },
-  modeChipText: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#475569"
+  instructionText: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#0f172a"
   },
-  modeChipTextActive: {
-    color: "#ffffff"
-  },
-  flashcard: {
+  promptCard: {
     backgroundColor: "#ffffff",
-    borderRadius: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
     overflow: "hidden",
-    elevation: 4,
+    marginBottom: 16,
+    elevation: 2,
     shadowColor: "#0f172a",
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 }
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 }
   },
-  cardBanner: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+  promptBanner: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center"
   },
-  genderBadge: {
-    backgroundColor: "rgba(255,255,255,0.24)",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6
-  },
-  genderBadgeText: {
+  bannerGenderText: {
     color: "#ffffff",
     fontSize: 11,
     fontWeight: "800"
   },
-  cardMetaText: {
-    color: "#ffffff",
-    fontSize: 12,
-    fontWeight: "600"
+  speakerPill: {
+    backgroundColor: "rgba(255,255,255,0.22)",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999
   },
-  cardBody: {
-    padding: 18,
+  speakerPillText: {
+    color: "#ffffff",
+    fontSize: 11.5,
+    fontWeight: "700"
+  },
+  promptBody: {
+    padding: 16,
     alignItems: "center"
   },
-  swedishPrompt: {
-    fontSize: 30,
-    fontWeight: "800",
-    color: "#0f172a",
-    marginBottom: 12,
-    textAlign: "center"
-  },
-  englishPrompt: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#0f172a",
-    marginVertical: 10,
-    textAlign: "center"
-  },
-  audioButton: {
-    backgroundColor: "#f1f5f9",
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    marginBottom: 14
-  },
-  audioButtonText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#0f172a"
-  },
-  contextQuote: {
-    backgroundColor: "#f8fafc",
-    borderLeftWidth: 4,
-    borderLeftColor: "#005B99",
-    padding: 12,
-    borderRadius: 8,
+  promptImage: {
     width: "100%",
-    marginBottom: 16
-  },
-  contextSvText: {
-    fontSize: 15,
-    fontStyle: "italic",
-    color: "#1e293b",
-    textAlign: "center"
-  },
-  cardImage: {
-    width: "100%",
-    height: 185,
+    height: 150,
     borderRadius: 12,
     marginBottom: 12,
     backgroundColor: "#e2e8f0"
   },
-  revealBtn: {
-    backgroundColor: "#005B99",
-    width: "100%",
-    paddingVertical: 14,
-    borderRadius: 12,
+  swedishWordText: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: "#0f172a",
+    marginBottom: 10,
+    textAlign: "center"
+  },
+  contextBubble: {
+    backgroundColor: "#f8fafc",
+    borderLeftWidth: 4,
+    borderLeftColor: "#005B99",
+    padding: 10,
+    borderRadius: 8,
+    width: "100%"
+  },
+  contextSentenceText: {
+    fontSize: 14,
+    color: "#334155",
+    fontStyle: "italic",
+    textAlign: "center"
+  },
+  optionsContainer: {
+    gap: 10
+  },
+  optionCard: {
+    backgroundColor: "#ffffff",
+    borderWidth: 2,
+    borderColor: "#e2e8f0",
+    borderRadius: 14,
+    padding: 14,
+    flexDirection: "row",
     alignItems: "center",
+    gap: 12
+  },
+  optionCardSelected: {
+    borderColor: "#005B99",
+    backgroundColor: "#f0f9ff"
+  },
+  optionCardCorrect: {
+    borderColor: "#22c55e",
+    backgroundColor: "#f0fdf4"
+  },
+  optionCardWrong: {
+    borderColor: "#ef4444",
+    backgroundColor: "#fef2f2"
+  },
+  optionKeyCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  optionKeyCircleSelected: {
+    borderColor: "#005B99",
+    backgroundColor: "#005B99"
+  },
+  optionKeyCircleCorrect: {
+    borderColor: "#22c55e",
+    backgroundColor: "#22c55e"
+  },
+  optionKeyCircleWrong: {
+    borderColor: "#ef4444",
+    backgroundColor: "#ef4444"
+  },
+  optionKeyText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#64748b"
+  },
+  optionKeyTextSelected: {
+    color: "#ffffff"
+  },
+  optionKeyTextCorrect: {
+    color: "#ffffff"
+  },
+  optionKeyTextWrong: {
+    color: "#ffffff"
+  },
+  optionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1e293b",
+    flex: 1
+  },
+  optionTitleSelected: {
+    color: "#005B99"
+  },
+  optionTitleCorrect: {
+    color: "#15803d"
+  },
+  optionTitleWrong: {
+    color: "#b91c1c"
+  },
+  keyboardContainer: {
     marginTop: 6
   },
-  revealBtnText: {
+  keyboardInput: {
+    backgroundColor: "#ffffff",
+    borderWidth: 2,
+    borderColor: "#cbd5e1",
+    borderRadius: 14,
+    padding: 14,
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0f172a"
+  },
+  keyboardInputCorrect: {
+    borderColor: "#22c55e",
+    backgroundColor: "#f0fdf4"
+  },
+  keyboardInputWrong: {
+    borderColor: "#ef4444",
+    backgroundColor: "#fef2f2"
+  },
+  bottomBar: {
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    padding: 16,
+    backgroundColor: "#ffffff"
+  },
+  bottomBarCorrect: {
+    backgroundColor: "#dcfce7",
+    borderTopColor: "#86efac"
+  },
+  bottomBarWrong: {
+    backgroundColor: "#fee2e2",
+    borderTopColor: "#fca5a5"
+  },
+  checkBtn: {
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center"
+  },
+  checkBtnDisabled: {
+    backgroundColor: "#e2e8f0"
+  },
+  checkBtnActive: {
+    backgroundColor: "#005B99"
+  },
+  checkBtnText: {
+    fontSize: 15,
+    fontWeight: "800"
+  },
+  checkBtnTextDisabled: {
+    color: "#94a3b8"
+  },
+  checkBtnTextActive: {
+    color: "#ffffff"
+  },
+  feedbackContainer: {
+    gap: 8
+  },
+  feedbackHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center"
+  },
+  feedbackTitle: {
+    fontSize: 18,
+    fontWeight: "800"
+  },
+  feedbackExpectedText: {
+    fontSize: 14.5,
+    color: "#b91c1c",
+    lineHeight: 20
+  },
+  feedbackMetaText: {
+    fontSize: 12.5,
+    color: "#166534"
+  },
+  continueBtn: {
+    marginTop: 6,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center"
+  },
+  continueBtnText: {
     color: "#ffffff",
     fontSize: 16,
     fontWeight: "800"
   },
-  answerSection: {
-    width: "100%",
-    alignItems: "center"
+  centerContainer: {
+    flexGrow: 1,
+    justifyContent: "center",
+    padding: 20
   },
-  divider: {
-    height: 1,
-    backgroundColor: "#e2e8f0",
-    width: "100%",
-    marginVertical: 14
-  },
-  answerHeadline: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: "#005B99",
-    textAlign: "center",
-    marginBottom: 6
-  },
-  inflectionsText: {
-    fontSize: 13,
-    color: "#475569",
-    marginBottom: 6,
-    textAlign: "center"
-  },
-  definitionText: {
-    fontSize: 13,
-    color: "#334155",
-    backgroundColor: "#f8fafc",
-    padding: 8,
-    borderRadius: 8,
-    width: "100%",
-    textAlign: "center",
-    marginBottom: 8
-  },
-  sentenceTransText: {
-    fontSize: 13,
-    color: "#64748b",
-    marginBottom: 16,
-    textAlign: "center"
-  },
-  ratingRow: {
-    flexDirection: "row",
-    gap: 8,
-    width: "100%",
-    marginTop: 6
-  },
-  rateBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: "center"
-  },
-  rateInterval: {
-    color: "rgba(255,255,255,0.9)",
-    fontSize: 11,
-    fontWeight: "600"
-  },
-  rateLabel: {
-    color: "#ffffff",
-    fontSize: 14,
-    fontWeight: "800"
-  },
-  doneCard: {
+  completeCard: {
     backgroundColor: "#ffffff",
-    borderRadius: 18,
-    padding: 28,
-    alignItems: "center"
+    borderRadius: 20,
+    padding: 24,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e2e8f0"
   },
-  doneEmoji: {
+  celebrateEmoji: {
     fontSize: 48,
     marginBottom: 10
   },
-  doneTitle: {
-    fontSize: 20,
+  completeTitle: {
+    fontSize: 24,
     fontWeight: "800",
     color: "#0f172a",
-    marginBottom: 6
+    marginBottom: 8
   },
-  doneSubtitle: {
-    fontSize: 14,
-    color: "#64748b",
+  completeSubtitle: {
+    fontSize: 14.5,
+    color: "#475569",
     textAlign: "center",
-    marginBottom: 20,
-    lineHeight: 20
+    lineHeight: 22,
+    marginBottom: 20
   },
-  primaryBtn: {
+  duoPrimaryBtn: {
     backgroundColor: "#005B99",
     paddingVertical: 13,
     paddingHorizontal: 20,
@@ -796,72 +1084,67 @@ const styles = StyleSheet.create({
     width: "100%",
     alignItems: "center"
   },
-  primaryBtnText: {
+  duoPrimaryBtnText: {
     color: "#ffffff",
     fontSize: 15,
     fontWeight: "800"
   },
-  deckItem: {
-    backgroundColor: "#ffffff",
+  duoSecondaryBtn: {
+    backgroundColor: "#f1f5f9",
+    paddingVertical: 13,
+    paddingHorizontal: 20,
     borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
+    width: "100%",
+    alignItems: "center"
+  },
+  duoSecondaryBtnText: {
+    color: "#334155",
+    fontSize: 14.5,
+    fontWeight: "700"
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: "#f8fafc"
+  },
+  modalHeader: {
+    padding: 16,
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    gap: 12
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+    backgroundColor: "#ffffff"
   },
-  deckThumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 8,
-    backgroundColor: "#e2e8f0"
-  },
-  deckThumbPlaceholder: {
-    width: 56,
-    height: 56,
-    borderRadius: 8,
-    backgroundColor: "#e2e8f0",
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  deckWordSv: {
-    fontSize: 16,
+  modalTitle: {
+    fontSize: 18,
     fontWeight: "800",
     color: "#0f172a"
   },
-  deckWordEn: {
-    fontSize: 14,
-    color: "#475569"
+  modalCloseBtn: {
+    padding: 6
   },
-  deckWordMeta: {
-    fontSize: 11,
-    color: "#94a3b8",
-    marginTop: 2
+  modalContent: {
+    padding: 16
   },
-  deckAudioBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: "#f1f5f9",
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  settingsCard: {
+  settingsSection: {
     backgroundColor: "#ffffff",
-    borderRadius: 16,
-    padding: 18
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    marginBottom: 16
   },
-  settingsTitle: {
-    fontSize: 18,
+  sectionHeading: {
+    fontSize: 16,
     fontWeight: "800",
     color: "#0f172a",
     marginBottom: 6
   },
-  settingsSubtitle: {
+  sectionDesc: {
     fontSize: 13,
     color: "#64748b",
-    marginBottom: 16,
-    lineHeight: 19
+    lineHeight: 18,
+    marginBottom: 14
   },
   inputLabel: {
     fontSize: 12,
@@ -869,20 +1152,41 @@ const styles = StyleSheet.create({
     color: "#334155",
     marginBottom: 4
   },
-  textInput: {
+  modalInput: {
+    backgroundColor: "#f8fafc",
     borderWidth: 1,
     borderColor: "#cbd5e1",
     borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    padding: 10,
     fontSize: 14,
-    marginBottom: 14
+    marginBottom: 12,
+    color: "#0f172a"
   },
-  syncStatusText: {
-    marginTop: 12,
+  syncStatusMsg: {
+    marginTop: 10,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#005B99",
     textAlign: "center"
+  },
+  wordRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9"
+  },
+  wordRowSv: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0f172a"
+  },
+  wordRowEn: {
+    fontSize: 13,
+    color: "#64748b",
+    marginTop: 2
+  },
+  wordRowAudioBtn: {
+    padding: 8
   }
 });

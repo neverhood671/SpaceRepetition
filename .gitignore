@@ -1,6 +1,7 @@
 # Compiled TypeScript output
 dist/
 chrome-extension/dist/
+android-app/dist/
 
 # Dependencies
 node_modules/

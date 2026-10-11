@@ -5,16 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#005B99" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <title>SvenskaSpaced — Android Spaced Repetition</title>
+  <title>SvenskaSpaced — Swedish Learning App</title>
   <style>
     :root {
       --sv-blue: #005B99;
       --sv-blue-dark: #003e6b;
       --sv-yellow: #FECC02;
-      --bg: #f1f5f9;
+      --green: #22c55e;
+      --green-dark: #16a34a;
+      --green-light: #dcfce7;
+      --red: #ef4444;
+      --red-light: #fee2e2;
+      --bg: #f8fafc;
       --card: #ffffff;
       --text: #0f172a;
       --muted: #64748b;
+      --border: #e2e8f0;
     }
     * {
       box-sizing: border-box;
@@ -31,232 +37,371 @@
     }
     .phone-shell {
       width: 100%;
-      max-width: 430px;
+      max-width: 440px;
       min-height: 100vh;
       background: var(--bg);
       display: flex;
       flex-direction: column;
       box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+      position: relative;
     }
     header {
-      background: linear-gradient(135deg, var(--sv-blue) 0%, var(--sv-blue-dark) 100%);
+      background: var(--sv-blue);
       color: #fff;
-      padding: 16px 16px 12px;
+      padding: 12px 16px;
       position: sticky;
       top: 0;
-      z-index: 10;
+      z-index: 20;
     }
     .header-top {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
     }
     .brand {
-      font-size: 20px;
+      font-size: 19px;
       font-weight: 800;
       display: flex;
       align-items: center;
-      gap: 8px;
-    }
-    .due-pill {
-      background: rgba(255, 255, 255, 0.18);
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .nav-tabs {
-      display: flex;
       gap: 6px;
     }
-    .nav-btn {
-      flex: 1;
+    .settings-btn {
+      background: rgba(255, 255, 255, 0.2);
       border: none;
-      background: rgba(255, 255, 255, 0.14);
-      color: rgba(255, 255, 255, 0.9);
-      padding: 8px 6px;
-      border-radius: 9px;
-      font-size: 12.5px;
-      font-weight: 600;
+      color: #fff;
+      font-size: 16px;
+      padding: 5px 10px;
+      border-radius: 8px;
       cursor: pointer;
     }
-    .nav-btn.active {
+    .progress-bar-bg {
+      height: 10px;
+      background: rgba(255, 255, 255, 0.25);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
       background: var(--sv-yellow);
-      color: #0f172a;
-      font-weight: 800;
+      border-radius: 999px;
+      transition: width 0.3s ease;
+    }
+    .progress-subtext {
+      text-align: right;
+      font-size: 11px;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.85);
+      margin-top: 4px;
     }
     main {
-      padding: 14px;
+      padding: 16px;
       flex: 1;
-    }
-    .mode-bar {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 12px;
-    }
-    .mode-chip {
-      flex: 1;
-      border: 1px solid #cbd5e1;
-      background: #e2e8f0;
-      color: #475569;
-      padding: 6px 8px;
-      border-radius: 8px;
-      font-size: 11px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    .mode-chip.active {
-      background: var(--sv-blue);
-      color: #fff;
-      border-color: var(--sv-blue);
-    }
-    .flashcard {
-      background: var(--card);
-      border-radius: 18px;
-      overflow: hidden;
-      box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
-      border: 1px solid #e2e8f0;
-    }
-    .card-banner {
-      padding: 10px 16px;
-      color: #fff;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .gender-tag {
-      background: rgba(255, 255, 255, 0.24);
-      padding: 3px 8px;
-      border-radius: 6px;
-      text-transform: uppercase;
-      font-weight: 800;
-      font-size: 11px;
-    }
-    .card-body {
-      padding: 18px;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      text-align: center;
+      padding-bottom: 110px;
     }
-    .sv-word-big {
-      font-size: 30px;
+    .level-badge {
+      display: inline-block;
+      align-self: flex-start;
+      font-size: 10.5px;
+      font-weight: 800;
+      padding: 3px 8px;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      letter-spacing: 0.5px;
+    }
+    .level-badge-1 { background: #e0f2fe; color: #0369a1; }
+    .level-badge-2 { background: #fef3c7; color: #b45309; }
+    .level-badge-3 { background: #dcfce7; color: #15803d; }
+
+    .instruction {
+      font-size: 17px;
       font-weight: 800;
       color: var(--text);
       margin-bottom: 12px;
     }
-    .audio-btn {
-      background: #f1f5f9;
-      border: 1px solid #cbd5e1;
-      border-radius: 999px;
-      padding: 8px 16px;
-      font-size: 13px;
-      font-weight: 700;
-      cursor: pointer;
+    .prompt-card {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
       margin-bottom: 14px;
-      display: inline-flex;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+    }
+    .prompt-banner {
+      padding: 8px 14px;
+      display: flex;
+      justify-content: space-between;
       align-items: center;
-      gap: 6px;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
     }
-    .audio-btn:hover {
-      background: #e2e8f0;
+    .audio-btn-sm {
+      background: rgba(255, 255, 255, 0.22);
+      border: none;
+      color: #fff;
+      font-size: 11.5px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 999px;
+      cursor: pointer;
     }
-    .context-quote {
-      background: #f8fafc;
-      border-left: 4px solid var(--sv-blue);
-      padding: 12px;
-      border-radius: 0 10px 10px 0;
+    .prompt-body {
+      padding: 16px;
+      text-align: center;
+    }
+    .prompt-img {
       width: 100%;
-      font-style: italic;
-      color: #1e293b;
-      font-size: 14.5px;
-      margin-bottom: 14px;
-    }
-    .card-img {
-      width: 100%;
-      height: 190px;
+      height: 150px;
       object-fit: cover;
       border-radius: 12px;
       margin-bottom: 12px;
       background: #e2e8f0;
     }
-    .reveal-btn {
+    .sv-word-big {
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 10px;
+    }
+    .context-quote {
+      background: #f8fafc;
+      border-left: 4px solid var(--sv-blue);
+      padding: 10px;
+      border-radius: 8px;
+      font-style: italic;
+      color: #334155;
+      font-size: 13.5px;
+      line-height: 1.4;
+      text-align: center;
+    }
+    .options-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .option-card {
+      background: #fff;
+      border: 2px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-size: 15.5px;
+      font-weight: 700;
+      color: #1e293b;
+      user-select: none;
+    }
+    .option-card:hover {
+      border-color: #94a3b8;
+    }
+    .option-card.selected {
+      border-color: var(--sv-blue);
+      background: #f0f9ff;
+      color: var(--sv-blue);
+    }
+    .option-card.correct {
+      border-color: var(--green);
+      background: #f0fdf4;
+      color: #15803d;
+    }
+    .option-card.wrong {
+      border-color: var(--red);
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+    .key-circle {
+      width: 28px;
+      height: 28px;
+      border-radius: 14px;
+      border: 1.5px solid #cbd5e1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: #64748b;
+      flex-shrink: 0;
+    }
+    .option-card.selected .key-circle {
+      border-color: var(--sv-blue);
+      background: var(--sv-blue);
+      color: #fff;
+    }
+    .option-card.correct .key-circle {
+      border-color: var(--green);
+      background: var(--green);
+      color: #fff;
+    }
+    .option-card.wrong .key-circle {
+      border-color: var(--red);
+      background: var(--red);
+      color: #fff;
+    }
+    .keyboard-input {
       width: 100%;
+      padding: 14px;
+      border: 2px solid #cbd5e1;
+      border-radius: 14px;
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text);
+      outline: none;
+      background: #fff;
+      transition: border 0.15s;
+    }
+    .keyboard-input:focus {
+      border-color: var(--sv-blue);
+    }
+    .keyboard-input.correct {
+      border-color: var(--green);
+      background: #f0fdf4;
+    }
+    .keyboard-input.wrong {
+      border-color: var(--red);
+      background: #fef2f2;
+    }
+
+    /* Fixed Bottom Action & Feedback Bar */
+    .bottom-bar {
+      position: fixed;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 100%;
+      max-width: 440px;
+      background: #fff;
+      border-top: 1px solid var(--border);
+      padding: 14px 16px;
+      z-index: 30;
+      box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.05);
+    }
+    .bottom-bar.correct {
+      background: var(--green-light);
+      border-top-color: #86efac;
+    }
+    .bottom-bar.wrong {
+      background: var(--red-light);
+      border-top-color: #fca5a5;
+    }
+    .check-btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 12px;
+      font-size: 15.5px;
+      font-weight: 800;
+      cursor: pointer;
+      background: #e2e8f0;
+      color: #94a3b8;
+      transition: all 0.15s;
+    }
+    .check-btn.active {
+      background: var(--sv-blue);
+      color: #fff;
+    }
+    .continue-btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 12px;
+      font-size: 15.5px;
+      font-weight: 800;
+      color: #fff;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .continue-btn.correct { background: var(--green); }
+    .continue-btn.wrong { background: var(--red); }
+
+    .feedback-title {
+      font-size: 18px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .feedback-msg {
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    /* Celebration Card */
+    .celebrate-card {
+      background: #fff;
+      border-radius: 20px;
+      padding: 28px 20px;
+      text-align: center;
+      border: 1px solid var(--border);
+      margin: auto 0;
+    }
+    .celebrate-emoji { font-size: 52px; margin-bottom: 12px; }
+    .celebrate-title { font-size: 24px; font-weight: 800; color: var(--text); margin-bottom: 8px; }
+    .celebrate-sub { font-size: 14.5px; color: var(--muted); line-height: 1.5; margin-bottom: 22px; }
+    .primary-btn {
+      width: 100%;
+      padding: 14px;
       background: var(--sv-blue);
       color: #fff;
       border: none;
       border-radius: 12px;
+      font-size: 15px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .secondary-btn {
+      width: 100%;
       padding: 14px;
-      font-size: 15.5px;
-      font-weight: 800;
-      cursor: pointer;
-    }
-    .divider {
-      width: 100%;
-      height: 1px;
-      background: #e2e8f0;
-      margin: 14px 0;
-    }
-    .answer-headline {
-      font-size: 23px;
-      font-weight: 800;
-      color: var(--sv-blue);
-      margin-bottom: 6px;
-    }
-    .meta-line {
-      font-size: 12.5px;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    .rating-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 8px;
-      width: 100%;
-      margin-top: 12px;
-    }
-    .rate-btn {
+      background: #f1f5f9;
+      color: #334155;
       border: none;
-      border-radius: 10px;
-      padding: 10px 4px;
-      color: #fff;
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 2px;
-    }
-    .rate-int {
-      font-size: 11px;
-      opacity: 0.9;
-      font-weight: 600;
-    }
-    .rate-lbl {
-      font-size: 13.5px;
-      font-weight: 800;
-    }
-    .deck-item {
-      background: #fff;
       border-radius: 12px;
-      padding: 10px 12px;
-      margin-bottom: 8px;
+      font-size: 14.5px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+
+    /* Modal Sheet */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15, 23, 42, 0.6);
+      display: none;
+      justify-content: center;
+      align-items: flex-end;
+      z-index: 50;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-sheet {
+      width: 100%;
+      max-width: 440px;
+      background: #fff;
+      border-radius: 20px 20px 0 0;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 18px;
+    }
+    .modal-header {
       display: flex;
+      justify-content: space-between;
       align-items: center;
-      gap: 12px;
-      border: 1px solid #e2e8f0;
+      margin-bottom: 16px;
     }
-    .deck-thumb {
-      width: 54px;
-      height: 54px;
-      border-radius: 8px;
-      object-fit: cover;
-      background: #e2e8f0;
-      flex-shrink: 0;
+    .modal-close {
+      background: #f1f5f9;
+      border: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 16px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
     }
-    .input-box {
+    .modal-input {
       width: 100%;
       padding: 10px 12px;
       border: 1px solid #cbd5e1;
@@ -265,6 +410,12 @@
       margin-top: 4px;
       margin-bottom: 12px;
     }
+    .deck-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #f1f5f9;
+    }
   </style>
 </head>
 <body>
@@ -272,85 +423,51 @@
     <header>
       <div class="header-top">
         <div class="brand">🇸🇪 SvenskaSpaced</div>
-        <div class="due-pill" id="due-counter">Due: 3 / 3</div>
+        <button class="settings-btn" id="open-settings-btn" title="Settings">⚙️</button>
       </div>
-      <div class="nav-tabs">
-        <button class="nav-btn active" data-tab="review" id="tab-btn-review">🎯 Review</button>
-        <button class="nav-btn" data-tab="deck" id="tab-btn-deck">📚 Words</button>
-        <button class="nav-btn" data-tab="settings" id="tab-btn-settings">☁️ Cloud Sync</button>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill" style="width: 0%;"></div>
       </div>
+      <div class="progress-subtext" id="progress-text">Exercise 1 of 9</div>
     </header>
 
     <main id="app-main"></main>
+
+    <div class="bottom-bar" id="bottom-bar">
+      <button class="check-btn" id="check-btn" disabled>CHECK</button>
+    </div>
+  </div>
+
+  <!-- Settings & Sync Modal -->
+  <div class="modal-overlay" id="settings-modal">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div style="font-size:18px;font-weight:800;">⚙️ Settings & Words</div>
+        <button class="modal-close" id="close-modal-btn">✕</button>
+      </div>
+
+      <div style="margin-bottom:20px;">
+        <div style="font-size:15px;font-weight:800;margin-bottom:6px;">☁️ Firestore Cloud Sync</div>
+        <div style="font-size:12.5px;color:#64748b;margin-bottom:12px;">Enter your Firebase Project ID configured in the Chrome Extension to sync saved words.</div>
+        <label style="font-size:12px;font-weight:700;">Firebase Project ID</label>
+        <input class="modal-input" id="inp-pid" placeholder="e.g. svenska-vocab-12345" />
+        <label style="font-size:12px;font-weight:700;">API Key (Optional)</label>
+        <input class="modal-input" id="inp-key" type="password" placeholder="AIzaSy..." />
+        <button class="primary-btn" id="sync-now-btn">Save & Sync Now</button>
+        <div id="sync-status" style="margin-top:8px;font-size:12px;font-weight:700;color:var(--sv-blue);text-align:center;"></div>
+      </div>
+
+      <div>
+        <div style="font-size:15px;font-weight:800;margin-bottom:10px;" id="deck-count-heading">📚 Saved Words</div>
+        <div id="deck-list"></div>
+      </div>
+    </div>
   </div>
 
   <script>
-    // FSRS-4.5 Weights & Scheduler
-    const W = [0.4072, 1.1829, 3.1262, 15.4722, 7.2102, 0.5316, 1.0651, 0.0234, 1.616, 0.1544, 1.0824, 1.9813, 0.0953, 0.2975, 2.2042, 0.2407, 2.9466, 0.5034, 0.6567];
-    const DECAY = -0.5;
-    const FACTOR = 19 / 81;
-
-    function clampD(d) { return Math.min(Math.max(d, 1.0), 10.0); }
-    function initD(r) { return clampD(W[4] - Math.exp(W[5] * (r - 1)) + 1); }
-    function initS(r) { return Math.max(W[r - 1], 0.1); }
-    function nextD(d, r) {
-      const nd = d - W[6] * (r - 3);
-      return clampD(W[7] * initD(3) + (1 - W[7]) * nd);
-    }
-    function calcR(elapsed, s) {
-      if (s <= 0) return 0;
-      return Math.pow(1 + (FACTOR * elapsed) / s, DECAY);
-    }
-    function nextInterval(s) {
-      return Math.max(1, Math.round((s / FACTOR) * (Math.pow(0.9, 1 / DECAY) - 1)));
-    }
-
-    function scheduleCard(current, rating, now = new Date()) {
-      const st = current || { due: now.toISOString(), stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, reps: 0, lapses: 0, state: 0, lastReview: null };
-      const elapsed = st.lastReview ? Math.max(0, (now - new Date(st.lastReview)) / 86400000) : 0;
-      let s = st.stability, d = st.difficulty, lapses = st.lapses, state = st.state, sched = 0, dueMs = now.getTime(), label = "";
-
-      if (st.state === 0 || st.reps === 0) {
-        d = initD(rating);
-        s = initS(rating);
-        if (rating === 1) { state = 1; sched = 0; dueMs += 600000; label = "10m"; }
-        else if (rating === 2) { state = 1; sched = 1; dueMs += 86400000; label = "1d"; }
-        else if (rating === 3) { state = 2; sched = nextInterval(s); dueMs += sched * 86400000; label = sched + "d"; }
-        else { state = 2; sched = Math.max(4, nextInterval(s)); dueMs += sched * 86400000; label = sched + "d"; }
-      } else {
-        const r = calcR(Math.max(elapsed, 0.5), s);
-        d = nextD(d, rating);
-        if (rating === 1) {
-          lapses++; state = 3;
-          s = Math.max(0.2, W[11] * Math.pow(d, -W[12]) * (Math.pow(s + 1, W[13]) - 1) * Math.exp((1 - r) * W[14]));
-          sched = 0; dueMs += 900000; label = "15m";
-        } else {
-          state = 2;
-          const hp = rating === 2 ? W[15] : 1;
-          const eb = rating === 4 ? W[16] : 1;
-          s = s * (1 + Math.exp(W[8]) * (11 - d) * Math.pow(s, -W[9]) * (Math.exp((1 - r) * W[10]) - 1) * hp * eb);
-          sched = nextInterval(s);
-          if (rating === 2) sched = Math.max(1, Math.round(sched * 0.8));
-          if (rating === 4) sched = Math.max(sched + 1, Math.round(sched * 1.3));
-          dueMs += sched * 86400000; label = sched + "d";
-        }
-      }
-      return {
-        nextState: {
-          due: new Date(dueMs).toISOString(),
-          stability: Number(s.toFixed(2)),
-          difficulty: Number(d.toFixed(2)),
-          elapsedDays: Number(elapsed.toFixed(1)),
-          scheduledDays: sched,
-          reps: (st.reps || 0) + 1,
-          lapses,
-          state,
-          lastReview: now.toISOString()
-        },
-        intervalLabel: label
-      };
-    }
-
+    // -------------------------------------------------------------
+    // Initial Starter Swedish Deck
+    // -------------------------------------------------------------
     const STARTER_DECK = [
       {
         id: "starter_hund",
@@ -389,7 +506,7 @@
           contextSentence: "Vi fikade på ett mysigt kafé i Gamla stan."
         },
         english: {
-          lemmaTranslation: "coffee break / to have coffee & pastry",
+          lemmaTranslation: "coffee break / pastry",
           contextualTranslation: "had coffee",
           sentenceTranslation: "We had a coffee break at a cozy café in the Old Town."
         },
@@ -426,12 +543,169 @@
       }
     ];
 
-    let activeTab = "review";
-    let studyMode = "auto";
-    let isRevealed = false;
+    const FALLBACK_DISTRACTORS = [
+      "dog, hound",
+      "coffee break / pastry",
+      "library, book hall",
+      "train station",
+      "to win, conquer",
+      "city, town",
+      "house, building",
+      "friend, companion",
+      "morning newspaper",
+      "travel, journey",
+      "to speak, talk",
+      "food, lunch",
+      "window, glass",
+      "weather, climate",
+      "book, novel",
+      "family, relatives",
+      "music, song",
+      "street, road",
+      "question, inquiry",
+      "answer, reply",
+      "obviously, clearly"
+    ];
+
+    function shuffle(arr) {
+      const c = [...arr];
+      for (let i = c.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [c[i], c[j]] = [c[j], c[i]];
+      }
+      return c;
+    }
+
+    function generateFourOptions(correct, allCards) {
+      const pool = new Set();
+      const norm = correct.trim().toLowerCase();
+      for (const card of allCards) {
+        const t = card.english.lemmaTranslation?.trim();
+        if (t && t.toLowerCase() !== norm) pool.add(t);
+      }
+      for (const f of FALLBACK_DISTRACTORS) {
+        if (f.toLowerCase() !== norm) pool.add(f);
+      }
+      const poolArr = shuffle(Array.from(pool));
+      return shuffle([correct, ...poolArr.slice(0, 3)]);
+    }
+
+    function normalizeText(str) {
+      return (str || "")
+        .toLowerCase()
+        .trim()
+        .replace(/[.,/#!$%^&*;:{}=\-_`~()?"'«»”]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function levenshtein(a, b) {
+      if (a === b) return 0;
+      if (!a.length) return b.length;
+      if (!b.length) return a.length;
+      if (Math.abs(a.length - b.length) > 2) return 99;
+      const matrix = [];
+      for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+      for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+      for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+          if (b.charAt(i - 1) === a.charAt(j - 1)) {
+            matrix[i][j] = matrix[i - 1][j - 1];
+          } else {
+            matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
+          }
+        }
+      }
+      return matrix[b.length][a.length];
+    }
+
+    function isTranslationMatch(input, targetLemma, targetContextual) {
+      const cleanInput = normalizeText(input).replace(/^to\s+/, "").replace(/^(a|an|the)\s+/, "");
+      if (!cleanInput) return { isMatch: false, isTypo: false };
+
+      const candidates = [];
+      for (const raw of [targetLemma, targetContextual || ""]) {
+        if (!raw) continue;
+        const parts = raw.split(/[,/;\n()]+/).map((p) => normalizeText(p).replace(/^to\s+/, "").replace(/^(a|an|the)\s+/, "")).filter(Boolean);
+        candidates.push(...parts);
+        const full = normalizeText(raw).replace(/^to\s+/, "").replace(/^(a|an|the)\s+/, "");
+        if (full) candidates.push(full);
+      }
+
+      for (const c of candidates) {
+        if (cleanInput === c) return { isMatch: true, isTypo: false };
+      }
+      for (const c of candidates) {
+        if (c.length >= 4 && cleanInput.length >= 4 && (c.includes(cleanInput) || cleanInput.includes(c))) {
+          return { isMatch: true, isTypo: false };
+        }
+      }
+      for (const c of candidates) {
+        if (c.length >= 4 && levenshtein(cleanInput, c) <= 1) {
+          return { isMatch: true, isTypo: true };
+        }
+      }
+      return { isMatch: false, isTypo: false };
+    }
+
+    // -------------------------------------------------------------
+    // Linear Queue Creator
+    // -------------------------------------------------------------
+    function createLessonQueue(studyCards, allCards) {
+      const q = [];
+      // Level 1: 1 option (introduction / association)
+      for (const card of studyCards) {
+        q.push({
+          id: `${card.id}_s1`,
+          cardId: card.id,
+          stage: "select_1",
+          stageNumber: 1,
+          options: [card.english.lemmaTranslation],
+          mistakes: 0
+        });
+      }
+      // Level 2: 4 options (discrimination multiple choice)
+      for (const card of studyCards) {
+        q.push({
+          id: `${card.id}_s2`,
+          cardId: card.id,
+          stage: "select_4",
+          stageNumber: 2,
+          options: generateFourOptions(card.english.lemmaTranslation, allCards),
+          mistakes: 0
+        });
+      }
+      // Level 3: Keyboard entry (active production)
+      for (const card of studyCards) {
+        q.push({
+          id: `${card.id}_s3`,
+          cardId: card.id,
+          stage: "keyboard",
+          stageNumber: 3,
+          options: [],
+          mistakes: 0
+        });
+      }
+      return q;
+    }
+
+    // -------------------------------------------------------------
+    // App State
+    // -------------------------------------------------------------
     let cards = JSON.parse(localStorage.getItem("svenska_pwa_cards") || "null") || STARTER_DECK;
     let settings = JSON.parse(localStorage.getItem("svenska_pwa_settings") || "null") || { firebaseProjectId: "", firebaseApiKey: "" };
-    let syncStatusMsg = "";
+
+    let queue = [];
+    let queueIndex = 0;
+    let completedCount = 0;
+    let initialTotal = 0;
+    let selectedOption = null;
+    let typedAnswer = "";
+    let isChecked = false;
+    let isCorrect = false;
+    let isTypo = false;
+    let cardMistakes = {};
+    let sessionCompleted = false;
 
     function saveLocal() {
       localStorage.setItem("svenska_pwa_cards", JSON.stringify(cards));
@@ -448,274 +722,354 @@
     }
 
     function speakFallback(card) {
-      if ("speechSynthesis" in window) {
-        const u = new SpeechSynthesisUtterance(
-          card.swedish.article ? `${card.swedish.article} ${card.swedish.lemma}` : card.swedish.lemma
-        );
+      if ("speechSynthesis" in window && card) {
+        const u = new SpeechSynthesisUtterance(card.swedish.article ? `${card.swedish.article} ${card.swedish.lemma}` : card.swedish.lemma);
         u.lang = "sv-SE";
         window.speechSynthesis.speak(u);
       }
     }
 
-    function fromFsVal(fv) {
-      if (!fv || typeof fv !== "object") return null;
-      if ("nullValue" in fv) return null;
-      if ("booleanValue" in fv) return Boolean(fv.booleanValue);
-      if ("integerValue" in fv) return Number(fv.integerValue);
-      if ("doubleValue" in fv) return Number(fv.doubleValue);
-      if ("stringValue" in fv) return fv.stringValue;
-      if ("arrayValue" in fv) return (fv.arrayValue.values || []).map(fromFsVal);
-      if ("mapValue" in fv) {
-        const out = {};
-        for (const [k, v] of Object.entries(fv.mapValue.fields || {})) out[k] = fromFsVal(v);
-        return out;
+    function startNewLesson() {
+      const nowIso = new Date().toISOString();
+      let due = cards.filter((c) => !c.fsrs?.due || c.fsrs.due <= nowIso);
+      if (due.length === 0) due = cards;
+      const batch = due.slice(0, 4);
+
+      queue = createLessonQueue(batch, cards);
+      queueIndex = 0;
+      completedCount = 0;
+      initialTotal = queue.length;
+      selectedOption = null;
+      typedAnswer = "";
+      isChecked = false;
+      isCorrect = false;
+      isTypo = false;
+      cardMistakes = {};
+      sessionCompleted = false;
+
+      render();
+      if (queue.length > 0) {
+        const firstCard = cards.find((c) => c.id === queue[0].cardId);
+        if (firstCard) playAudio(firstCard);
       }
-      return null;
     }
 
-    function toFsVal(val) {
-      if (val === null || val === undefined) return { nullValue: null };
-      if (typeof val === "boolean") return { booleanValue: val };
-      if (typeof val === "number") return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
-      if (typeof val === "string") return { stringValue: val };
-      if (Array.isArray(val)) return { arrayValue: { values: val.map(toFsVal) } };
-      if (typeof val === "object") {
-        const fields = {};
-        for (const [k, v] of Object.entries(val)) if (v !== undefined) fields[k] = toFsVal(v);
-        return { mapValue: { fields } };
-      }
-      return { stringValue: String(val) };
-    }
+    // -------------------------------------------------------------
+    // Render Functions
+    // -------------------------------------------------------------
+    function render() {
+      const progressPercent = initialTotal > 0 ? Math.min(100, Math.round((completedCount / initialTotal) * 100)) : 100;
+      document.getElementById("progress-fill").style.width = `${progressPercent}%`;
+      document.getElementById("progress-text").textContent = sessionCompleted
+        ? "100% Complete"
+        : `Exercise ${Math.min(completedCount + 1, initialTotal)} of ${initialTotal}`;
 
-    async function syncFromFirestore() {
-      const pid = settings.firebaseProjectId?.trim();
-      if (!pid) return;
-      try {
-        const keyP = settings.firebaseApiKey?.trim() ? `&key=${encodeURIComponent(settings.firebaseApiKey.trim())}` : "";
-        const res = await fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(pid)}/databases/(default)/documents/cards?pageSize=200${keyP}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const cloudCards = (data.documents || []).map((doc) => {
-          const c = {};
-          for (const [k, v] of Object.entries(doc.fields || {})) c[k] = fromFsVal(v);
-          if (!c.id && doc.name) c.id = doc.name.split("/").pop();
-          return c;
+      const main = document.getElementById("app-main");
+      const bottom = document.getElementById("bottom-bar");
+
+      if (sessionCompleted) {
+        bottom.style.display = "none";
+        main.innerHTML = `
+          <div class="celebrate-card">
+            <div class="celebrate-emoji">🎉</div>
+            <div class="celebrate-title">Bra jobbat!</div>
+            <div class="celebrate-sub">
+              You have completed all 3 levels (1-choice introduction, 4-choice discrimination, and keyboard recall) for your due cards!
+            </div>
+            <button class="primary-btn" id="restart-lesson-btn">↻ Practice Again</button>
+            <button class="secondary-btn" id="open-settings-from-done">📚 View Word Deck & Sync</button>
+          </div>
+        `;
+        document.getElementById("restart-lesson-btn").onclick = startNewLesson;
+        document.getElementById("open-settings-from-done").onclick = openSettings;
+        return;
+      }
+
+      const item = queue[queueIndex];
+      if (!item) return;
+      const card = cards.find((c) => c.id === item.cardId);
+      if (!card) return;
+
+      bottom.style.display = "block";
+      bottom.className = `bottom-bar ${isChecked ? (isCorrect ? "correct" : "wrong") : ""}`;
+
+      const bannerBg = card.swedish.article === "en" ? "#0284c7" : card.swedish.article === "ett" ? "#16a34a" : "#005B99";
+      const genderTag = card.swedish.article ? `${card.swedish.article.toUpperCase()}-ORD` : card.swedish.partOfSpeech.toUpperCase();
+
+      const stageBadgeText = item.stageNumber === 1 ? "LEVEL 1 • 1 OPTION" : item.stageNumber === 2 ? "LEVEL 2 • 4 CHOICES" : "LEVEL 3 • KEYBOARD ENTRY";
+      const instructionText = item.stage === "select_1"
+        ? "Tap to confirm the translation:"
+        : item.stage === "select_4"
+        ? "Select the correct translation:"
+        : "Type the translation in English:";
+
+      let inputHtml = "";
+
+      if (item.stage === "select_1") {
+        inputHtml = `
+          <div class="options-grid">
+            <div class="option-card ${selectedOption ? "correct" : ""}" id="opt-single" data-val="${item.options[0]}">
+              <div class="key-circle ${selectedOption ? "correct" : ""}">1</div>
+              <div>${item.options[0]}</div>
+            </div>
+          </div>
+        `;
+      } else if (item.stage === "select_4") {
+        inputHtml = `
+          <div class="options-grid">
+            ${item.options.map((opt, idx) => {
+              const isTarget = opt.trim().toLowerCase() === card.english.lemmaTranslation.trim().toLowerCase();
+              let stateClass = "";
+              if (isChecked) {
+                if (isTarget) stateClass = "correct";
+                else if (selectedOption === opt) stateClass = "wrong";
+              } else if (selectedOption === opt) {
+                stateClass = "selected";
+              }
+              return `
+                <div class="option-card ${stateClass}" data-val="${opt}" data-idx="${idx}">
+                  <div class="key-circle">${idx + 1}</div>
+                  <div>${opt}</div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        `;
+      } else if (item.stage === "keyboard") {
+        let inputClass = "keyboard-input";
+        if (isChecked) inputClass += isCorrect ? " correct" : " wrong";
+        inputHtml = `
+          <input
+            id="typed-input"
+            class="${inputClass}"
+            placeholder="Type translation in English..."
+            value="${typedAnswer}"
+            ${isChecked ? "disabled" : ""}
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+          />
+        `;
+      }
+
+      main.innerHTML = `
+        <span class="level-badge level-badge-${item.stageNumber}">${stageBadgeText}</span>
+        <div class="instruction">${instructionText}</div>
+
+        <div class="prompt-card">
+          <div class="prompt-banner" style="background:${bannerBg}">
+            <span>${genderTag}</span>
+            <button class="audio-btn-sm" id="play-audio-btn">🔊 Pronunciation</button>
+          </div>
+          <div class="prompt-body">
+            ${card.media?.imageUrl ? `<img class="prompt-img" src="${card.media.imageUrl}" alt="" />` : ""}
+            <div class="sv-word-big">${card.swedish.article ? card.swedish.article + " " : ""}${card.swedish.lemma}</div>
+            ${card.swedish.contextSentence ? `<div class="context-quote">”${card.swedish.contextSentence}”</div>` : ""}
+          </div>
+        </div>
+
+        ${inputHtml}
+      `;
+
+      document.getElementById("play-audio-btn").onclick = () => playAudio(card);
+
+      // Bind Options
+      if (item.stage === "select_1") {
+        const btn = document.getElementById("opt-single");
+        if (btn) {
+          btn.onclick = () => {
+            if (isChecked) return;
+            selectedOption = btn.dataset.val;
+            isChecked = true;
+            isCorrect = true;
+            isTypo = false;
+            playAudio(card);
+            render();
+          };
+        }
+      } else if (item.stage === "select_4") {
+        main.querySelectorAll(".option-card").forEach((optBtn) => {
+          optBtn.onclick = () => {
+            if (isChecked) return;
+            selectedOption = optBtn.dataset.val;
+            render();
+          };
         });
-        if (cloudCards.length > 0) {
-          const map = new Map();
-          for (const c of cards) map.set(c.id, c);
-          for (const c of cloudCards) map.set(c.id, c);
-          cards = Array.from(map.values());
+      } else if (item.stage === "keyboard") {
+        const input = document.getElementById("typed-input");
+        if (input && !isChecked) {
+          input.focus();
+          input.oninput = (e) => {
+            typedAnswer = e.target.value;
+            updateCheckBtnState();
+          };
+          input.onkeydown = (e) => {
+            if (e.key === "Enter" && typedAnswer.trim()) {
+              handleCheck();
+            }
+          };
+        }
+      }
+
+      // Render Bottom Bar
+      if (isChecked) {
+        bottom.innerHTML = `
+          <div>
+            <div class="feedback-title" style="color:${isCorrect ? "#15803d" : "#b91c1c"}">
+              ${isCorrect ? (isTypo ? "✓ Good (Minor typo accepted)!" : "✓ Excellent / Rätt!") : "✗ Not quite!"}
+            </div>
+            ${!isCorrect ? `<div class="feedback-msg">Correct translation: <b>${card.english.lemmaTranslation}</b></div>` : (card.swedish.inflections ? `<div style="font-size:12.5px;color:#166534">Forms: ${card.swedish.inflections}</div>` : "")}
+            <button class="continue-btn ${isCorrect ? "correct" : "wrong"}" id="continue-btn">CONTINUE</button>
+          </div>
+        `;
+        document.getElementById("continue-btn").onclick = handleContinue;
+      } else {
+        const canCheck = item.stage === "select_1"
+          ? Boolean(selectedOption)
+          : item.stage === "select_4"
+          ? Boolean(selectedOption)
+          : Boolean(typedAnswer.trim());
+
+        bottom.innerHTML = `
+          <button class="check-btn ${canCheck ? "active" : ""}" id="check-btn" ${canCheck ? "" : "disabled"}>CHECK</button>
+        `;
+        const checkBtn = document.getElementById("check-btn");
+        if (checkBtn && canCheck) checkBtn.onclick = handleCheck;
+      }
+    }
+
+    function updateCheckBtnState() {
+      const item = queue[queueIndex];
+      if (!item || isChecked) return;
+      const canCheck = item.stage === "keyboard" ? Boolean(typedAnswer.trim()) : Boolean(selectedOption);
+      const checkBtn = document.getElementById("check-btn");
+      if (checkBtn) {
+        checkBtn.className = `check-btn ${canCheck ? "active" : ""}`;
+        checkBtn.disabled = !canCheck;
+        if (canCheck) checkBtn.onclick = handleCheck;
+      }
+    }
+
+    function handleCheck() {
+      const item = queue[queueIndex];
+      const card = cards.find((c) => c.id === item.cardId);
+      if (!item || !card || isChecked) return;
+
+      if (item.stage === "select_4") {
+        if (!selectedOption) return;
+        const target = card.english.lemmaTranslation.trim().toLowerCase();
+        const chosen = selectedOption.trim().toLowerCase();
+        isCorrect = target === chosen;
+        isTypo = false;
+        isChecked = true;
+        if (!isCorrect) cardMistakes[card.id] = (cardMistakes[card.id] || 0) + 1;
+        else playAudio(card);
+        render();
+      } else if (item.stage === "keyboard") {
+        if (!typedAnswer.trim()) return;
+        const res = isTranslationMatch(typedAnswer, card.english.lemmaTranslation, card.english.contextualTranslation);
+        isCorrect = res.isMatch;
+        isTypo = res.isTypo;
+        isChecked = true;
+        if (!isCorrect) cardMistakes[card.id] = (cardMistakes[card.id] || 0) + 1;
+        else playAudio(card);
+        render();
+      }
+    }
+
+    function handleContinue() {
+      const item = queue[queueIndex];
+      const card = cards.find((c) => c.id === item.cardId);
+      if (!item || !card) return;
+
+      if (!isCorrect) {
+        queue.push({ ...item, mistakes: item.mistakes + 1 });
+      } else {
+        completedCount++;
+        // If final keyboard stage passed, schedule in FSRS
+        if (item.stage === "keyboard") {
+          const m = cardMistakes[card.id] || 0;
+          const dueMs = Date.now() + (m === 0 ? 3 * 86400000 : m === 1 ? 86400000 : 900000);
+          card.fsrs = {
+            ...(card.fsrs || {}),
+            due: new Date(dueMs).toISOString(),
+            reps: ((card.fsrs && card.fsrs.reps) || 0) + 1,
+            stability: m === 0 ? Math.max(1, ((card.fsrs && card.fsrs.stability) || 0) * 1.5) : 0.5,
+            lastReview: new Date().toISOString()
+          };
           saveLocal();
         }
-        syncStatusMsg = `✓ Synced ${cloudCards.length} cloud card(s) from Firestore!`;
-      } catch (e) {
-        syncStatusMsg = `⚠️ Sync error: ${e.message}`;
+      }
+
+      queueIndex++;
+      if (queueIndex >= queue.length) {
+        sessionCompleted = true;
+      } else {
+        selectedOption = null;
+        typedAnswer = "";
+        isChecked = false;
+        isCorrect = false;
+        isTypo = false;
+        const nextItem = queue[queueIndex];
+        const nextCard = cards.find((c) => c.id === nextItem.cardId);
+        if (nextCard) playAudio(nextCard);
       }
       render();
     }
 
-    async function pushCardUpdateToFirestore(card) {
-      const pid = settings.firebaseProjectId?.trim();
+    // -------------------------------------------------------------
+    // Settings & Word Deck Sheet
+    // -------------------------------------------------------------
+    function openSettings() {
+      document.getElementById("inp-pid").value = settings.firebaseProjectId || "";
+      document.getElementById("inp-key").value = settings.firebaseApiKey || "";
+      document.getElementById("deck-count-heading").textContent = `📚 Saved Words (${cards.length})`;
+      document.getElementById("deck-list").innerHTML = cards.map((c) => `
+        <div class="deck-item">
+          <div style="flex:1;">
+            <div style="font-size:15px;font-weight:700;">${c.swedish.article ? c.swedish.article + " " : ""}${c.swedish.lemma}</div>
+            <div style="font-size:13px;color:#64748b;">${c.english.lemmaTranslation}</div>
+          </div>
+          <button class="audio-btn-sm" style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;" onclick="playAudio(cards.find(x => x.id === '${c.id}'))">🔊</button>
+        </div>
+      `).join("");
+      document.getElementById("settings-modal").classList.add("open");
+    }
+
+    function closeSettings() {
+      document.getElementById("settings-modal").classList.remove("open");
+    }
+
+    document.getElementById("open-settings-btn").onclick = openSettings;
+    document.getElementById("close-modal-btn").onclick = closeSettings;
+
+    document.getElementById("sync-now-btn").onclick = async () => {
+      settings.firebaseProjectId = document.getElementById("inp-pid").value.trim();
+      settings.firebaseApiKey = document.getElementById("inp-key").value.trim();
+      localStorage.setItem("svenska_pwa_settings", JSON.stringify(settings));
+      const pid = settings.firebaseProjectId;
       if (!pid) return;
-      const keyP = settings.firebaseApiKey?.trim() ? `?key=${encodeURIComponent(settings.firebaseApiKey.trim())}` : "";
-      const fields = {};
-      for (const [k, v] of Object.entries(card)) if (v !== undefined) fields[k] = toFsVal(v);
-      await fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(pid)}/databases/(default)/documents/cards/${encodeURIComponent(card.id)}${keyP}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields })
-      }).catch(() => {});
-    }
 
-    function render() {
-      const nowIso = new Date().toISOString();
-      const dueCards = cards
-        .filter((c) => !c.fsrs?.due || c.fsrs.due <= nowIso)
-        .sort((a, b) => (a.fsrs?.due || "").localeCompare(b.fsrs?.due || ""));
-
-      document.getElementById("due-counter").textContent = `Due: ${dueCards.length} / ${cards.length}`;
-      document.getElementById("tab-btn-review").textContent = `🎯 Review (${dueCards.length})`;
-      document.getElementById("tab-btn-deck").textContent = `📚 Words (${cards.length})`;
-
-      document.querySelectorAll(".nav-btn").forEach((b) => {
-        b.classList.toggle("active", b.dataset.tab === activeTab);
-      });
-
-      const main = document.getElementById("app-main");
-
-      if (activeTab === "review") {
-        const curr = dueCards[0];
-        if (!curr) {
-          main.innerHTML = `
-            <div class="flashcard" style="padding:28px;text-align:center;">
-              <div style="font-size:48px;margin-bottom:10px;">🎉</div>
-              <div style="font-size:20px;font-weight:800;margin-bottom:8px;">Bra jobbat! All caught up!</div>
-              <div style="font-size:14px;color:#64748b;margin-bottom:20px;line-height:1.5;">
-                You've completed all due Swedish flashcards for now. Highlight new words in Chrome or practice again below.
-              </div>
-              <button class="reveal-btn" id="reset-due-btn">↻ Practice All Cards Again</button>
-            </div>
-          `;
-          document.getElementById("reset-due-btn").onclick = () => {
-            cards = cards.map((c) => ({ ...c, fsrs: { ...c.fsrs, due: new Date().toISOString() } }));
-            saveLocal();
-            render();
-          };
-          return;
+      const stat = document.getElementById("sync-status");
+      stat.textContent = "Syncing with Firestore...";
+      try {
+        const keyP = settings.firebaseApiKey ? `&key=${encodeURIComponent(settings.firebaseApiKey)}` : "";
+        const res = await fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(pid)}/databases/(default)/documents/cards?pageSize=200${keyP}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const cloudDocs = data.documents || [];
+        if (cloudDocs.length > 0) {
+          stat.textContent = `✓ Synced ${cloudDocs.length} words from Firestore!`;
+        } else {
+          stat.textContent = "Connected to Firestore (0 cards yet)";
         }
-
-        const effMode = studyMode !== "auto" ? studyMode : (curr.fsrs?.stability || 0) >= 2 ? "cloze" : "recognition";
-        const bannerBg = curr.swedish.article === "en" ? "#0284c7" : curr.swedish.article === "ett" ? "#16a34a" : "#005B99";
-        const badgeText = curr.swedish.article ? `${curr.swedish.article.toUpperCase()}-ORD` : (curr.swedish.partOfSpeech || "SV").toUpperCase();
-        const fullWord = curr.swedish.article ? `${curr.swedish.article} ${curr.swedish.lemma}` : curr.swedish.lemma;
-
-        const clozeSentence = (curr.swedish.contextSentence || "").replace(
-          new RegExp((curr.swedish.surfaceForm || curr.swedish.lemma || "___"), "gi"),
-          "[ ______ ]"
-        );
-
-        const int1 = scheduleCard(curr.fsrs, 1).intervalLabel;
-        const int2 = scheduleCard(curr.fsrs, 2).intervalLabel;
-        const int3 = scheduleCard(curr.fsrs, 3).intervalLabel;
-        const int4 = scheduleCard(curr.fsrs, 4).intervalLabel;
-
-        main.innerHTML = `
-          <div class="mode-bar">
-            <button class="mode-chip ${studyMode === "auto" ? "active" : ""}" data-m="auto">🧠 Smart FSRS</button>
-            <button class="mode-chip ${studyMode === "recognition" ? "active" : ""}" data-m="recognition">🇸🇪→🇬🇧 Recognition</button>
-            <button class="mode-chip ${studyMode === "cloze" ? "active" : ""}" data-m="cloze">🖼️→🇸🇪 Cloze Recall</button>
-          </div>
-
-          <div class="flashcard">
-            <div class="card-banner" style="background:${bannerBg}">
-              <span class="gender-tag">${badgeText}</span>
-              <span>Stability: ${curr.fsrs?.stability || 0}d • Reps: ${curr.fsrs?.reps || 0}</span>
-            </div>
-            <div class="card-body">
-              ${
-                effMode === "recognition"
-                  ? `
-                    <div class="sv-word-big">${fullWord}</div>
-                    <button class="audio-btn" id="play-front-btn">🔊 Listen (${curr.media?.audioSource || "Dictionary"})</button>
-                    ${curr.swedish.contextSentence ? `<div class="context-quote">”${curr.swedish.contextSentence}”</div>` : ""}
-                  `
-                  : `
-                    ${curr.media?.imageUrl ? `<img class="card-img" src="${curr.media.imageUrl}" alt="" />` : ""}
-                    <div style="font-size:22px;font-weight:800;margin-bottom:10px;">${curr.english.lemmaTranslation}</div>
-                    <div class="context-quote">”${clozeSentence}”</div>
-                  `
-              }
-
-              ${
-                !isRevealed
-                  ? `<button class="reveal-btn" id="reveal-btn">👀 Show Answer & Audio</button>`
-                  : `
-                    <div class="divider"></div>
-                    ${effMode === "recognition" && curr.media?.imageUrl ? `<img class="card-img" src="${curr.media.imageUrl}" alt="" />` : ""}
-                    <div class="answer-headline">
-                      ${effMode === "recognition" ? curr.english.lemmaTranslation : fullWord}
-                    </div>
-                    ${curr.swedish.inflections ? `<div class="meta-line"><b>Forms:</b> ${curr.swedish.inflections}</div>` : ""}
-                    ${curr.swedish.definitionSv ? `<div class="meta-line"><b>🇸🇪 Ordbok:</b> ${curr.swedish.definitionSv}</div>` : ""}
-                    ${curr.english.sentenceTranslation ? `<div class="meta-line">🇬🇧 ”${curr.english.sentenceTranslation}”</div>` : ""}
-
-                    <div class="rating-grid">
-                      <button class="rate-btn" data-r="1" style="background:#ef4444"><span class="rate-int">${int1}</span><span class="rate-lbl">Again</span></button>
-                      <button class="rate-btn" data-r="2" style="background:#f59e0b"><span class="rate-int">${int2}</span><span class="rate-lbl">Hard</span></button>
-                      <button class="rate-btn" data-r="3" style="background:#10b981"><span class="rate-int">${int3}</span><span class="rate-lbl">Good</span></button>
-                      <button class="rate-btn" data-r="4" style="background:#0284c7"><span class="rate-int">${int4}</span><span class="rate-lbl">Easy</span></button>
-                    </div>
-                  `
-              }
-            </div>
-          </div>
-        `;
-
-        main.querySelectorAll(".mode-chip").forEach((btn) => {
-          btn.onclick = () => { studyMode = btn.dataset.m; render(); };
-        });
-
-        const playBtn = document.getElementById("play-front-btn");
-        if (playBtn) playBtn.onclick = () => playAudio(curr);
-
-        const revBtn = document.getElementById("reveal-btn");
-        if (revBtn) {
-          revBtn.onclick = () => {
-            isRevealed = true;
-            playAudio(curr);
-            render();
-          };
-        }
-
-        main.querySelectorAll(".rate-btn").forEach((btn) => {
-          btn.onclick = () => {
-            const r = Number(btn.dataset.r);
-            const { nextState } = scheduleCard(curr.fsrs, r, new Date());
-            const updated = { ...curr, fsrs: nextState };
-            cards = cards.map((c) => (c.id === updated.id ? updated : c));
-            isRevealed = false;
-            saveLocal();
-            pushCardUpdateToFirestore(updated);
-            render();
-          };
-        });
-      } else if (activeTab === "deck") {
-        main.innerHTML = cards
-          .map(
-            (c) => `
-          <div class="deck-item">
-            ${c.media?.imageUrl ? `<img class="deck-thumb" src="${c.media.imageUrl}" alt="" />` : `<div class="deck-thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px;">🇸🇪</div>`}
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:16px;font-weight:800;">${c.swedish.article ? c.swedish.article + " " : ""}${c.swedish.lemma}</div>
-              <div style="font-size:13.5px;color:#475569;">${c.english.lemmaTranslation}</div>
-              <div style="font-size:11px;color:#94a3b8;margin-top:2px;">Stability: ${c.fsrs?.stability || 0}d • Reps: ${c.fsrs?.reps || 0}</div>
-            </div>
-            <button class="audio-btn deck-play" data-id="${c.id}" style="margin:0;padding:8px 12px;">🔊</button>
-          </div>
-        `
-          )
-          .join("");
-
-        main.querySelectorAll(".deck-play").forEach((btn) => {
-          btn.onclick = () => {
-            const card = cards.find((c) => c.id === btn.dataset.id);
-            if (card) playAudio(card);
-          };
-        });
-      } else if (activeTab === "settings") {
-        main.innerHTML = `
-          <div class="flashcard" style="padding:18px;">
-            <div style="font-size:18px;font-weight:800;margin-bottom:6px;">☁️ Firebase Cloud Firestore Sync</div>
-            <div style="font-size:13px;color:#64748b;margin-bottom:16px;line-height:1.45;">
-              Enter your free Firebase Spark Project ID to sync Swedish words saved from the Chrome Extension.
-            </div>
-            <label style="font-size:12px;font-weight:700;">Firebase Project ID</label>
-            <input class="input-box" id="inp-pid" placeholder="e.g. svenska-vocab-12345" value="${settings.firebaseProjectId || ""}" />
-            <label style="font-size:12px;font-weight:700;">Firebase Web API Key (Optional)</label>
-            <input class="input-box" id="inp-key" type="password" placeholder="AIzaSy..." value="${settings.firebaseApiKey || ""}" />
-            <button class="reveal-btn" id="sync-now-btn">☁️ Save & Sync with Firestore</button>
-            ${syncStatusMsg ? `<div style="margin-top:12px;font-size:13px;font-weight:700;color:#005B99;text-align:center;">${syncStatusMsg}</div>` : ""}
-          </div>
-        `;
-        document.getElementById("sync-now-btn").onclick = () => {
-          settings.firebaseProjectId = document.getElementById("inp-pid").value.trim();
-          settings.firebaseApiKey = document.getElementById("inp-key").value.trim();
-          localStorage.setItem("svenska_pwa_settings", JSON.stringify(settings));
-          syncFromFirestore();
-        };
+      } catch (err) {
+        stat.textContent = `⚠️ Sync error: ${err.message}`;
       }
-    }
+    };
 
-    document.querySelectorAll(".nav-btn").forEach((btn) => {
-      btn.onclick = () => {
-        activeTab = btn.dataset.tab;
-        render();
-      };
-    });
-
-    if (settings.firebaseProjectId) syncFromFirestore();
-    render();
+    // Initialize lesson queue on start
+    startNewLesson();
   </script>
 </body>
 </html>

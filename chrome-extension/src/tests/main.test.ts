@@ -5,7 +5,9 @@ import {
   extractImagesFromHtml,
   fetchGoogleImages,
   fetchImageAsBase64,
-  analyzeSwedishWord
+  analyzeSwedishWord,
+  isVerbPartOfSpeech,
+  isAdverbPartOfSpeech
 } from "../background.js";
 import {
   createCardObject,
@@ -225,9 +227,61 @@ async function runTests(): Promise<void> {
   });
 
   // ---------------------------------------------------------------------------
-  // 3. Swedish Wiktionary Parsing (Gender, Inflections, Partikelverb)
+  // 3. Swedish Dictionary & Wiktionary Parsing
   // ---------------------------------------------------------------------------
   console.log("\n3. Swedish Dictionary & Wiktionary Parsing");
+
+  await test("part-of-speech helpers never confuse 'adverb' with 'verb'", () => {
+    assertEqual(isVerbPartOfSpeech("verb"), true, "'verb' should be a verb");
+    assertEqual(isVerbPartOfSpeech("partikelverb"), true, "'partikelverb' should be a verb");
+    assertEqual(isVerbPartOfSpeech("partikelverb", "ha ihjäl"), true, "multi-word 'ha ihjäl' is a partikelverb");
+    assertEqual(isVerbPartOfSpeech("partikelverb", "ihjäl"), false, "single token 'ihjäl' cannot be a partikelverb");
+    assertEqual(isVerbPartOfSpeech("verbpartikel"), false, "'verbpartikel' MUST NOT be classified as a verb");
+    assertEqual(isVerbPartOfSpeech("partikel"), false, "'partikel' MUST NOT be classified as a verb");
+    assertEqual(isVerbPartOfSpeech("adverb"), false, "'adverb' MUST NOT be classified as a verb");
+    assertEqual(isVerbPartOfSpeech("Adverb"), false, "Case-insensitive check for 'adverb'");
+    assertEqual(isVerbPartOfSpeech("adverbial"), false, "'adverbial' MUST NOT be classified as a verb");
+    assertEqual(isVerbPartOfSpeech("noun"), false, "'noun' is not a verb");
+
+    assertEqual(isAdverbPartOfSpeech("adverb"), true, "'adverb' is an adverb");
+    assertEqual(isAdverbPartOfSpeech("verbpartikel"), true, "'verbpartikel' is an adverb");
+    assertEqual(isAdverbPartOfSpeech("word", "ihjäl"), true, "'ihjäl' is recognized as an adverbial particle");
+    assertEqual(isAdverbPartOfSpeech("word", "uppenbarligen"), true, "-ligen suffix marks adverb");
+    assertEqual(isAdverbPartOfSpeech("word", "tydligen"), true, "-ligen suffix marks adverb");
+    assertEqual(isAdverbPartOfSpeech("verb", "segra"), false, "'segra' is not an adverb");
+  });
+
+  await test("parses 'uppenbarligen' as adverb without adding 'att '", async () => {
+    (globalThis as any).fetch = async () => createMockResponse({ jsonData: {} });
+    const svSection = `
+===Adverb===
+{{adv|sv}}
+'''uppenbarligen'''
+#utan tvekan, [[bevisligen]], [[tydligen]], [[naturligtvis]]
+*engelska: {{ö+|en|obviously}}
+`;
+    const parsed = await parseWiktionarySection("uppenbarligen", svSection);
+    assertEqual(parsed.partOfSpeech, "adverb", "Should detect adverb");
+    assertEqual(parsed.article, "", "Adverb must have empty article");
+    assertEqual(parsed.englishFromWiktionary, "obviously", "Should extract 'obviously'");
+  });
+
+  await test("parses Swedish Wiktionary '===Verbpartikel===' ('ihjäl') as adverb without 'att '", async () => {
+    (globalThis as any).fetch = async () => createMockResponse({ jsonData: {} });
+    const svSection = `
+===Verbpartikel===
+{{verbpartikel|sv}}
+'''ihjäl'''
+# till [[döds]], så att [[döden]] [[inträffa]]r
+#:''De slogs till blods, men inte '''ihjäl''' varandra.''
+#:''Att ha '''ihjäl''' någon.''
+*engelska: {{ö|en|to death}}
+`;
+    const parsed = await parseWiktionarySection("ihjäl", svSection);
+    assertEqual(parsed.partOfSpeech, "adverb", "===Verbpartikel=== must be mapped to 'adverb'");
+    assertEqual(parsed.article, "", "Verbpartikel must have empty article");
+    assertEqual(parsed.englishFromWiktionary, "to death", "Should extract 'to death'");
+  });
 
   await test("parses 'en' noun gender, Swedish definition, and English translations", async () => {
     (globalThis as any).fetch = async () =>
@@ -521,6 +575,187 @@ async function runTests(): Promise<void> {
     );
     assertEqual(enriched.swedish.partOfSpeech, "partikelverb", "Should be 'partikelverb'");
     assert(Boolean(enriched.media.imageUrl), "Should include an image URL");
+  });
+
+  await test("recognizes adverb 'uppenbarligen' correctly as adverb without 'att ' prefix", async () => {
+    (globalThis as any).fetch = async (input: string | URL) => {
+      const url = decodeURIComponent(String(input));
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=uppenbarligen")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "116": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Adverb===\n{{adv|sv}}\n'''uppenbarligen'''\n#utan tvekan, [[bevisligen]]\n*engelska: {{ö+|en|obviously}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("translate.googleapis.com")) {
+        return createMockResponse({
+          jsonData: [
+            [["obviously", "uppenbarligen"]],
+            [["adverb", ["obviously", "apparently"], [], "uppenbarligen"]]
+          ]
+        });
+      }
+      return createMockResponse({ jsonData: {} });
+    };
+
+    const enriched = await analyzeSwedishWord({
+      word: "uppenbarligen",
+      contextSentence: "Vi och de-mekanismerna i oss har uppenbarligen varit flexibla nog–"
+    });
+
+    assertEqual(
+      enriched.swedish.lemma,
+      "uppenbarligen",
+      "Adverb MUST NOT have 'att ' prepended"
+    );
+    assertEqual(
+      enriched.swedish.partOfSpeech,
+      "adverb",
+      "partOfSpeech MUST be 'adverb'"
+    );
+    assertEqual(
+      enriched.swedish.article,
+      "",
+      "Adverb must have no article"
+    );
+    assertEqual(
+      enriched.english.lemmaTranslation,
+      "obviously",
+      "Should extract English translation 'obviously'"
+    );
+  });
+
+  await test("recognizes verbal particle 'ihjäl' as adverb without 'att ' prefix in context", async () => {
+    (globalThis as any).fetch = async (input: string | URL) => {
+      const url = decodeURIComponent(String(input));
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=ihjäl")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "101": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Verbpartikel===\n{{verbpartikel|sv}}\n'''ihjäl'''\n# till [[döds]], så att [[döden]] [[inträffa]]r\n*engelska: {{ö|en|to death}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("translate.googleapis.com")) {
+        return createMockResponse({
+          jsonData: [
+            [["to death", "ihjäl"]],
+            [["adverb", ["to death"], [], "ihjäl"]]
+          ]
+        });
+      }
+      return createMockResponse({ jsonData: {} });
+    };
+
+    const enriched = await analyzeSwedishWord({
+      word: "ihjäl",
+      contextSentence: "Två personer som gjorde allt för att ha ihjäl varandra–"
+    });
+
+    assertEqual(
+      enriched.swedish.lemma,
+      "ihjäl",
+      "Particle 'ihjäl' MUST NOT have 'att ' prepended"
+    );
+    assertEqual(
+      enriched.swedish.partOfSpeech,
+      "adverb",
+      "Particle 'ihjäl' MUST have partOfSpeech 'adverb'"
+    );
+    assertEqual(
+      enriched.swedish.article,
+      "",
+      "Particle 'ihjäl' must have empty article"
+    );
+  });
+
+  await test("recognizes multi-word phrasal verb 'ha ihjäl' with 'att ' prefix", async () => {
+    (globalThis as any).fetch = async (input: string | URL) => {
+      const url = decodeURIComponent(String(input));
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=ha ihjäl")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "202": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Verb===\n'''ha ihjäl''' (partikelverb)\n# [[döda]]\n*engelska: {{ö+|en|kill}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=ha")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "201": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Verb===\n'''ha'''\n# äga"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("translate.googleapis.com")) {
+        return createMockResponse({
+          jsonData: [
+            [["kill", "ha ihjäl"]],
+            [["verb", ["kill", "destroy"], [], "ha ihjäl"]]
+          ]
+        });
+      }
+      return createMockResponse({ jsonData: {} });
+    };
+
+    const enriched = await analyzeSwedishWord({
+      word: "ha ihjäl",
+      contextSentence: "Två personer som gjorde allt för att ha ihjäl varandra–"
+    });
+
+    assertEqual(
+      enriched.swedish.lemma,
+      "att ha ihjäl",
+      "Phrasal verb 'ha ihjäl' MUST be prefixed with 'att '"
+    );
+    assertEqual(
+      enriched.swedish.partOfSpeech,
+      "partikelverb",
+      "Phrasal verb 'ha ihjäl' MUST have partOfSpeech 'partikelverb'"
+    );
+    assertEqual(
+      enriched.swedish.article,
+      "",
+      "Verb must have empty article"
+    );
   });
 
   // ---------------------------------------------------------------------------
