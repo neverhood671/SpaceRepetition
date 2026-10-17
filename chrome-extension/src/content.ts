@@ -48,6 +48,7 @@ interface SelectedSubtitleToken {
   // SVT Play Subtitle Overlay state
   let subOverlayWrap: HTMLDivElement | null = null;
   let subLinesEl: HTMLDivElement | null = null;
+  let playerRewindBtn: HTMLButtonElement | null = null;
   let observedSubContainer: HTMLElement | null = null;
   let subMutationObserver: MutationObserver | null = null;
   let autoPausedVideo: HTMLVideoElement | null = null;
@@ -382,10 +383,9 @@ interface SelectedSubtitleToken {
         backdrop-filter: blur(6px);
         border: 1.5px solid rgba(255, 255, 255, 0.18);
         border-radius: 14px;
-        padding: 8px 16px;
+        padding: 8px 18px;
         display: flex;
         align-items: center;
-        gap: 10px;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
         max-width: 92%;
         user-select: text;
@@ -434,6 +434,80 @@ interface SelectedSubtitleToken {
         text-shadow: none;
         box-shadow: 0 0 0 2px #f59e0b;
       }
+      .sv-player-rewind-btn {
+        position: fixed;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: rgba(10, 15, 28, 0.84);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1.5px solid rgba(255, 255, 255, 0.28);
+        color: #ffffff;
+        cursor: pointer;
+        z-index: 2147483646;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+        opacity: 0.88;
+        transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease, opacity 0.15s ease, box-shadow 0.12s ease;
+        user-select: none;
+        pointer-events: auto;
+      }
+      .sv-player-rewind-btn:hover {
+        opacity: 1;
+        background: #FECC02;
+        color: #0f172a;
+        border-color: #FECC02;
+        transform: scale(1.08);
+        box-shadow: 0 6px 20px rgba(254, 204, 2, 0.45);
+      }
+      .sv-player-rewind-btn:active {
+        transform: scale(0.94);
+      }
+      .sv-player-rewind-btn svg {
+        width: 19px;
+        height: 19px;
+        fill: currentColor;
+      }
+      .sv-rewind-toast {
+        position: fixed;
+        display: none;
+        align-items: center;
+        gap: 8px;
+        background: rgba(10, 15, 28, 0.92);
+        color: #FECC02;
+        border: 1.5px solid #FECC02;
+        border-radius: 999px;
+        padding: 7px 18px;
+        font-size: 13.5px;
+        font-weight: 700;
+        pointer-events: none;
+        z-index: 2147483647;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+        animation: svFadeIn 0.15s ease-out;
+      }
+      .sv-context-replay-btn {
+        margin-top: 6px;
+        background: #e0f2fe;
+        color: #0369a1;
+        border: 1px solid #bae6fd;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        transition: all 0.12s;
+      }
+      .sv-context-replay-btn:hover {
+        background: #0284c7;
+        color: #ffffff;
+        border-color: #0284c7;
+      }
     `;
     shadowRoot.appendChild(style);
 
@@ -450,7 +524,36 @@ interface SelectedSubtitleToken {
     });
     shadowRoot.appendChild(triggerBtn);
 
-    // 2. SVT Play Interactive Subtitle Overlay
+    // 2. Dedicated Video Replay Button (Fixed, Stable Position outside subtitle container)
+    playerRewindBtn = document.createElement("button");
+    playerRewindBtn.className = "sv-player-rewind-btn";
+    playerRewindBtn.id = "sv-player-rewind-btn";
+    playerRewindBtn.setAttribute("type", "button");
+    playerRewindBtn.setAttribute("title", "Föregående replik (Shift + ←)");
+    playerRewindBtn.setAttribute("aria-label", "Föregående replik (Shift + ←)");
+    playerRewindBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 6h2v12H6V6zm3.5 6l8.5 6V6l-8.5 6z" />
+      </svg>
+    `;
+
+    ["mousedown", "mouseup", "click", "dblclick", "pointerdown"].forEach(
+      (evtName) => {
+        playerRewindBtn?.addEventListener(evtName, (e: Event) => {
+          e.stopPropagation();
+        });
+      }
+    );
+
+    playerRewindBtn.addEventListener("click", (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      jumpToPreviousReplica();
+    });
+
+    shadowRoot.appendChild(playerRewindBtn);
+
+    // 3. SVT Play Interactive Subtitle Overlay (Word chips & translation lookups)
     subOverlayWrap = document.createElement("div");
     subOverlayWrap.className = "sv-sub-overlay-wrap";
     subOverlayWrap.innerHTML = `
@@ -497,7 +600,7 @@ interface SelectedSubtitleToken {
 
   document.addEventListener("fullscreenchange", () => {
     initShadowHost();
-    updateSubtitleOverlayPosition();
+    updatePlayerOverlayPositions();
   });
 
   function getVideoElement(): HTMLVideoElement | null {
@@ -505,6 +608,147 @@ interface SelectedSubtitleToken {
       document.querySelector<HTMLVideoElement>('video[data-rt="video-player"]') ||
       document.querySelector<HTMLVideoElement>("video")
     );
+  }
+
+  interface SubtitleReplica {
+    text: string;
+    startTime: number;
+  }
+
+  const subtitleReplicas: SubtitleReplica[] = [];
+  let lastRecordedReplicaText = "";
+
+  function recordSubtitleReplica(text: string, time: number): void {
+    const cleanText = text.replace(/\s+/g, " ").trim();
+    if (!cleanText) return;
+    if (cleanText === lastRecordedReplicaText) return;
+    lastRecordedReplicaText = cleanText;
+
+    const last = subtitleReplicas[subtitleReplicas.length - 1];
+    if (last && Math.abs(time - last.startTime) < 0.8) {
+      last.text = cleanText;
+      return;
+    }
+
+    subtitleReplicas.push({ text: cleanText, startTime: time });
+    if (subtitleReplicas.length > 80) {
+      subtitleReplicas.shift();
+    }
+  }
+
+  function formatTimestamp(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  }
+
+  function showRewindToast(label: string): void {
+    if (!shadowRoot) return;
+    let toast = shadowRoot.querySelector<HTMLDivElement>("#sv-rewind-toast");
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.id = "sv-rewind-toast";
+      toast.className = "sv-rewind-toast";
+      shadowRoot.appendChild(toast);
+    }
+
+    const video = getVideoElement();
+    if (video) {
+      const rect = video.getBoundingClientRect();
+      toast.style.left = `${Math.round(rect.left + rect.width / 2)}px`;
+      toast.style.top = `${Math.round(rect.top + 36)}px`;
+      toast.style.transform = "translateX(-50%)";
+    } else {
+      toast.style.left = "50%";
+      toast.style.top = "40px";
+      toast.style.transform = "translateX(-50%)";
+    }
+
+    const cleanLabel = label.length > 40 ? label.slice(0, 40) + "…" : label;
+    toast.innerHTML = `<span>⏮</span><span>Föregående replik: <i>”${escapeHtml(cleanLabel)}”</i></span>`;
+    toast.style.display = "flex";
+
+    clearTimeout((toast as any)._timeout);
+    (toast as any)._timeout = setTimeout(() => {
+      if (toast) toast.style.display = "none";
+    }, 1500);
+  }
+
+  function jumpToPreviousReplica(): void {
+    const video = getVideoElement();
+    if (!video) return;
+
+    const curr = video.currentTime;
+    let targetTime: number | null = null;
+    let replicaLabel = "";
+
+    // 1. Check native HTML5 textTracks cues if available
+    if (video.textTracks && video.textTracks.length > 0) {
+      for (let i = 0; i < video.textTracks.length; i++) {
+        const track = video.textTracks[i];
+        if (track.cues && track.cues.length > 0) {
+          const cuesArray = Array.from(track.cues).sort((a, b) => a.startTime - b.startTime);
+          const activeIdx = cuesArray.findIndex(
+            (c) => curr >= c.startTime && curr <= ((c as any).endTime ?? c.startTime + 4) + 0.3
+          );
+          if (activeIdx >= 0) {
+            const activeCue = cuesArray[activeIdx];
+            const cueText = (activeCue as any).text || "";
+            if (curr - activeCue.startTime > 1.2) {
+              targetTime = Math.max(0, activeCue.startTime - 0.2);
+              replicaLabel = cueText;
+            } else if (activeIdx > 0) {
+              const prevCue = cuesArray[activeIdx - 1];
+              targetTime = Math.max(0, prevCue.startTime - 0.2);
+              replicaLabel = (prevCue as any).text || "";
+            } else {
+              targetTime = Math.max(0, activeCue.startTime - 0.2);
+              replicaLabel = cueText;
+            }
+            break;
+          } else {
+            const pastCues = cuesArray.filter((c) => c.startTime < curr - 0.3);
+            if (pastCues.length > 0) {
+              const lastCue = pastCues[pastCues.length - 1];
+              targetTime = Math.max(0, lastCue.startTime - 0.2);
+              replicaLabel = (lastCue as any).text || "";
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Fallback to DOM-observed subtitleReplicas
+    if (targetTime === null && subtitleReplicas.length > 0) {
+      const sorted = [...subtitleReplicas].sort((a, b) => a.startTime - b.startTime);
+      const past = sorted.filter((r) => r.startTime <= curr + 0.3);
+
+      if (past.length > 0) {
+        const currentOrLatest = past[past.length - 1];
+        if (curr - currentOrLatest.startTime > 1.5) {
+          targetTime = Math.max(0, currentOrLatest.startTime - 0.2);
+          replicaLabel = currentOrLatest.text;
+        } else if (past.length > 1) {
+          const prevReplica = past[past.length - 2];
+          targetTime = Math.max(0, prevReplica.startTime - 0.2);
+          replicaLabel = prevReplica.text;
+        } else {
+          targetTime = Math.max(0, currentOrLatest.startTime - 0.2);
+          replicaLabel = currentOrLatest.text;
+        }
+      }
+    }
+
+    // 3. Fallback: rewind 4 seconds if no replica was logged yet
+    if (targetTime === null) {
+      targetTime = Math.max(0, curr - 4);
+      replicaLabel = `-${Math.round(curr - targetTime)}s`;
+    }
+
+    video.currentTime = targetTime;
+    video.play().catch(() => {});
+    showRewindToast(replicaLabel || formatTimestamp(targetTime));
   }
 
   function pauseVideoIfPlaying(): void {
@@ -645,10 +889,15 @@ interface SelectedSubtitleToken {
 
     if (lines.length === 0) {
       subOverlayWrap.style.display = "none";
+      updatePlayerOverlayPositions();
       return;
     }
 
     const fullSentence = lines.join(" ").replace(/\s+/g, " ").trim();
+    const video = getVideoElement();
+    if (video) {
+      recordSubtitleReplica(fullSentence, video.currentTime);
+    }
 
     subLinesEl.innerHTML = "";
     let runningTokenIndex = 0;
@@ -663,28 +912,54 @@ interface SelectedSubtitleToken {
     }
 
     subOverlayWrap.style.display = "flex";
-    updateSubtitleOverlayPosition();
+    updatePlayerOverlayPositions();
   }
 
-  function updateSubtitleOverlayPosition(): void {
-    if (!subOverlayWrap || subOverlayWrap.style.display === "none") return;
+  function updatePlayerOverlayPositions(): void {
     const video = getVideoElement() || observedSubContainer;
-    if (!video) return;
+    if (!video) {
+      if (playerRewindBtn) playerRewindBtn.style.display = "none";
+      if (subOverlayWrap) subOverlayWrap.style.display = "none";
+      return;
+    }
 
     const rect = video.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
+    if (rect.width === 0 || rect.height === 0) {
+      if (playerRewindBtn) playerRewindBtn.style.display = "none";
+      if (subOverlayWrap) subOverlayWrap.style.display = "none";
+      return;
+    }
 
     const bottomOffset = Math.max(
       24,
       window.innerHeight - rect.bottom + Math.min(72, rect.height * 0.12)
     );
-    subOverlayWrap.style.left = `${Math.round(rect.left)}px`;
-    subOverlayWrap.style.width = `${Math.round(rect.width)}px`;
-    subOverlayWrap.style.bottom = `${Math.round(bottomOffset)}px`;
+
+    // 1. Stable, unmoving Replay Button: Pinned to Lower-Left of video player
+    if (playerRewindBtn) {
+      playerRewindBtn.style.display = "flex";
+      playerRewindBtn.style.left = `${Math.round(rect.left + 24)}px`;
+      playerRewindBtn.style.bottom = `${Math.round(bottomOffset)}px`;
+    }
+
+    // 2. Subtitle overlay: Centered at bottomOffset
+    if (subOverlayWrap && subOverlayWrap.style.display !== "none") {
+      subOverlayWrap.style.left = `${Math.round(rect.left)}px`;
+      subOverlayWrap.style.width = `${Math.round(rect.width)}px`;
+      subOverlayWrap.style.bottom = `${Math.round(bottomOffset)}px`;
+    }
   }
 
   function setupSvtPlayWatcher(): void {
     const checkContainer = () => {
+      const video = getVideoElement();
+      if (video) {
+        initShadowHost();
+        updatePlayerOverlayPositions();
+      } else if (playerRewindBtn) {
+        playerRewindBtn.style.display = "none";
+      }
+
       const container = document.querySelector<HTMLElement>(
         '[data-rt="subtitles-container"]'
       );
@@ -709,8 +984,8 @@ interface SelectedSubtitleToken {
 
     checkContainer();
     setInterval(checkContainer, 1000);
-    window.addEventListener("resize", updateSubtitleOverlayPosition);
-    window.addEventListener("scroll", updateSubtitleOverlayPosition, {
+    window.addEventListener("resize", updatePlayerOverlayPositions);
+    window.addEventListener("scroll", updatePlayerOverlayPositions, {
       passive: true
     });
   }
@@ -780,14 +1055,16 @@ interface SelectedSubtitleToken {
     if (!src) return;
     const audio = new Audio(src);
     audio.play().catch(() => {
-      if ("speechSynthesis" in window && currentEnrichment?.swedish?.lemma) {
-        const utter = new SpeechSynthesisUtterance(
-          currentEnrichment.swedish.article
-            ? `${currentEnrichment.swedish.article} ${currentEnrichment.swedish.lemma}`
-            : currentEnrichment.swedish.lemma
+      if (media?.audioUrl && src !== media?.audioBase64) {
+        chrome.runtime.sendMessage(
+          { type: "FETCH_AUDIO", audioUrl: media.audioUrl },
+          (res: ExtensionResponse<string>) => {
+            if (res?.ok && res.data) {
+              if (media) media.audioBase64 = res.data;
+              new Audio(res.data).play().catch(() => {});
+            }
+          }
         );
-        utter.lang = "sv-SE";
-        window.speechSynthesis.speak(utter);
       }
     });
   }
@@ -971,6 +1248,11 @@ interface SelectedSubtitleToken {
                   )}</div>`
                 : ""
             }
+            ${
+              getVideoElement()
+                ? `<button class="sv-context-replay-btn" id="sv-context-replay-btn" title="Hoppa till föregående replik i videon"><span>⏮</span><span>Spela replik i videon</span></button>`
+                : ""
+            }
           </div>
         `
             : ""
@@ -998,6 +1280,11 @@ interface SelectedSubtitleToken {
       .querySelector("#sv-play-audio")
       ?.addEventListener("click", () => {
         playPronunciation(media);
+      });
+    popoverEl
+      .querySelector("#sv-context-replay-btn")
+      ?.addEventListener("click", () => {
+        jumpToPreviousReplica();
       });
 
     const nextImgBtn = popoverEl.querySelector(
@@ -1053,33 +1340,47 @@ interface SelectedSubtitleToken {
       saveBtn.addEventListener("click", () => {
         if (saveBtn.classList.contains("saved") || saveBtn.disabled) return;
         saveBtn.textContent = "Saving…";
-        chrome.runtime.sendMessage(
-          {
-            type: "SAVE_CARD",
-            payload: currentEnrichment
-          },
-          (res: ExtensionResponse<SaveCardResult>) => {
-            if (res?.ok) {
-              saveBtn.classList.add("saved");
-              saveBtn.disabled = true;
-              if (res.data?.alreadyExisted) {
-                saveBtn.classList.add("saved-existing");
-                saveBtn.innerHTML =
-                  "<span>★</span><span>Already Saved in Deck</span>";
+        try {
+          const payloadToSave: EnrichmentPayload | null = currentEnrichment
+            ? {
+                ...currentEnrichment,
+                media: {
+                  ...currentEnrichment.media,
+                  audioBase64: ""
+                }
+              }
+            : null;
+          chrome.runtime.sendMessage(
+            {
+              type: "SAVE_CARD",
+              payload: payloadToSave
+            },
+            (res: ExtensionResponse<SaveCardResult>) => {
+              if (res?.ok) {
+                saveBtn.classList.add("saved");
+                saveBtn.disabled = true;
+                if (res.data?.alreadyExisted) {
+                  saveBtn.classList.add("saved-existing");
+                  saveBtn.innerHTML =
+                    "<span>★</span><span>Already Saved in Deck</span>";
+                } else {
+                  const synced = res.data?.cloudSynced;
+                  saveBtn.innerHTML = synced
+                    ? "<span>✓</span><span>Saved to Cloud Firestore!</span>"
+                    : "<span>✓</span><span>Saved to Deck (Local)</span>";
+                }
+                for (const token of selectedSubtitleTokens) {
+                  token.el?.classList?.add("already-saved");
+                }
               } else {
-                const synced = res.data?.cloudSynced;
-                saveBtn.innerHTML = synced
-                  ? "<span>✓</span><span>Saved to Cloud Firestore!</span>"
-                  : "<span>✓</span><span>Saved to Deck (Local)</span>";
+                console.log("Failed to save card:", res?.error);
+                saveBtn.textContent = "⚠️ Retry Save";
               }
-              for (const token of selectedSubtitleTokens) {
-                token.el?.classList?.add("already-saved");
-              }
-            } else {
-              saveBtn.textContent = "⚠️ Retry Save";
             }
-          }
-        );
+          );
+        } catch (err) {   
+          console.error("Error sending SAVE_CARD message:", err);
+        }
       });
     }
 
@@ -1164,6 +1465,27 @@ interface SelectedSubtitleToken {
       };
       if (currentSelectionData.word) {
         openLookupPopover(currentSelectionData);
+      }
+    }
+  });
+
+  window.addEventListener("keydown", (e: KeyboardEvent) => {
+    const active = document.activeElement;
+    if (
+      active &&
+      (active.tagName === "INPUT" ||
+        active.tagName === "TEXTAREA" ||
+        (active as HTMLElement).isContentEditable)
+    ) {
+      return;
+    }
+
+    if ((e.shiftKey || e.altKey) && e.key === "ArrowLeft") {
+      const video = getVideoElement();
+      if (video) {
+        e.preventDefault();
+        e.stopPropagation();
+        jumpToPreviousReplica();
       }
     }
   });

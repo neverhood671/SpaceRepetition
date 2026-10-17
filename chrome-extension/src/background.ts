@@ -5,7 +5,8 @@ import {
   findExistingCard,
   getAllCards,
   deleteCard,
-  syncAllLocalToCloud
+  syncAllLocalToCloud,
+  cleanupSavedAudioInStorage
 } from "./firestore.js";
 import {
   AnalyzeWordRequest,
@@ -727,7 +728,9 @@ export async function fetchImageAsBase64(imageUrl: string): Promise<string> {
 }
 
 /**
- * Convert an audio URL into a compact Base64 Data URL (~12KB)
+ * Convert an audio URL into a transient in-memory Data URL so strict webpage CSPs
+ * (like svtplay.se media-src) do not block Swedish pronunciation playback in content scripts.
+ * Note: This data URL is NEVER persisted in local storage or Firestore (only audioUrl is saved).
  */
 async function fetchAudioAsBase64(audioUrl: string): Promise<string> {
   if (!audioUrl) return "";
@@ -911,8 +914,15 @@ export async function analyzeSwedishWord({
   };
 }
 
+if (typeof chrome !== "undefined" && chrome.storage?.local) {
+  cleanupSavedAudioInStorage().catch((err) =>
+    console.warn("Failed to clean up saved audio:", err)
+  );
+}
+
 if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
   chrome.runtime.onInstalled.addListener(() => {
+    cleanupSavedAudioInStorage().catch(() => {});
     chrome.contextMenus.create({
       id: "svenska-spaced-lookup",
       title: "🇸🇪 Look up '%s' in SvenskaSpaced",
@@ -941,6 +951,11 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
             case "ANALYZE_WORD": {
               const result = await analyzeSwedishWord(message.payload);
               sendResponse({ ok: true, data: result });
+              break;
+            }
+            case "FETCH_AUDIO": {
+              const dataUrl = await fetchAudioAsBase64(message.audioUrl);
+              sendResponse({ ok: true, data: dataUrl });
               break;
             }
             case "SAVE_CARD": {

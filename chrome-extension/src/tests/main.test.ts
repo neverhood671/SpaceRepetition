@@ -14,8 +14,12 @@ import {
   cardToFirestoreDoc,
   firestoreDocToCard,
   saveCardToStorage,
-  getAllCards
+  getAllCards,
+  stripCardSavedAudio
 } from "../firestore.js";
+import {
+  computePreviousReplicaSeek
+} from "../types.js";
 
 interface MockResponseInit {
   ok?: boolean;
@@ -800,7 +804,33 @@ async function runTests(): Promise<void> {
       "https://tse1.mm.bing.net/th?id=OIP.segra_trophy",
       "Image URL should survive Firestore serialization"
     );
+    assertEqual(
+      restored.media.audioUrl,
+      "https://upload.wikimedia.org/wikipedia/commons/Sv-segra.ogg",
+      "Audio link URL should be saved"
+    );
+    assertEqual(
+      restored.media.audioBase64,
+      "",
+      "Raw audioBase64 must NOT be saved in cards"
+    );
     assertEqual(restored.fsrs.state, 0, "Initial FSRS state should be 0 (New)");
+
+    const legacyCardWithAudio = {
+      ...restored,
+      media: {
+        ...restored.media,
+        audioUrl: "",
+        audioBase64: "data:audio/ogg;base64,T2dnUw=="
+      }
+    };
+    const cleaned = stripCardSavedAudio(legacyCardWithAudio);
+    assertEqual(cleaned.modified, true, "Legacy card with audioBase64 should be marked modified");
+    assertEqual(cleaned.card.media.audioBase64, "", "Cleaned card must have empty audioBase64");
+    assert(
+      cleaned.card.media.audioUrl.startsWith("https://"),
+      "Cleaned card must have an https audioUrl link"
+    );
   });
 
   await test("does NOT save a word for the second time (returns alreadyExisted: true and preserves original card)", async () => {
@@ -906,6 +936,107 @@ async function runTests(): Promise<void> {
     assert(
       Boolean(enriched.existingCardId),
       "Should include existingCardId of the saved card"
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // 6. Previous Replica Seeking & Video Subtitle Navigation
+  // ---------------------------------------------------------------------------
+  console.log("\n6. Previous Replica Seeking (Subtitle Cue Navigation)");
+
+  await test("restarts current replica with pre-roll when user is >1.5s into the replica", () => {
+    const replicas = [
+      { text: "Första repliken", startTime: 10.0 },
+      { text: "Andra repliken", startTime: 15.0 }
+    ];
+    // User is at 18.0s (3s into the second replica)
+    const result = computePreviousReplicaSeek(18.0, replicas);
+    assertEqual(
+      result.targetTime,
+      14.8,
+      "Should seek to second replica start (15.0) minus 0.2s safety pre-roll = 14.8s"
+    );
+    assertEqual(
+      result.replicaLabel,
+      "Andra repliken",
+      "Should label with current replica text"
+    );
+  });
+
+  await test("jumps to previous replica when user is <=1.5s into current replica (or rapid re-click)", () => {
+    const replicas = [
+      { text: "Första repliken", startTime: 10.0 },
+      { text: "Andra repliken", startTime: 15.0 },
+      { text: "Tredje repliken", startTime: 22.0 }
+    ];
+    // User is at 22.5s (only 0.5s into third replica)
+    const result = computePreviousReplicaSeek(22.5, replicas);
+    assertEqual(
+      result.targetTime,
+      14.8,
+      "Should jump back to previous (second) replica start (15.0 - 0.2 = 14.8s)"
+    );
+    assertEqual(
+      result.replicaLabel,
+      "Andra repliken",
+      "Should label with previous replica text"
+    );
+  });
+
+  await test("jumps to latest prior replica during pauses/silence between dialogue lines", () => {
+    const replicas = [
+      { text: "Det är en fin dag.", startTime: 30.0 },
+      { text: "Ja, verkligen.", startTime: 34.0 }
+    ];
+    // Video is at 41.0s (silence after second line ended at ~36s)
+    const result = computePreviousReplicaSeek(41.0, replicas);
+    assertEqual(
+      result.targetTime,
+      33.8,
+      "Should jump to start of latest replica (34.0 - 0.2 = 33.8s)"
+    );
+    assertEqual(
+      result.replicaLabel,
+      "Ja, verkligen.",
+      "Should label with latest replica text"
+    );
+  });
+
+  await test("falls back to 4-second rewind if no replicas have been recorded yet", () => {
+    const result = computePreviousReplicaSeek(12.5, []);
+    assertEqual(
+      result.targetTime,
+      8.5,
+      "Fallback should seek current time - 4 seconds"
+    );
+    assertEqual(
+      result.replicaLabel,
+      "-4s",
+      "Should label with relative rewind offset"
+    );
+  });
+
+  await test("supports native HTML5 textTracks cues when present", () => {
+    const cues = [
+      { startTime: 5.0, endTime: 8.0, text: "Hej och välkomna!" },
+      { startTime: 9.0, endTime: 13.0, text: "Idag ska vi prata om språkinlärning." }
+    ];
+    // At 12.0s (> 1.2s into cue 2)
+    const r1 = computePreviousReplicaSeek(12.0, [], cues);
+    assertEqual(r1.targetTime, 8.8, "Restarts cue 2 at 8.8s (9.0 - 0.2s)");
+    assertEqual(
+      r1.replicaLabel,
+      "Idag ska vi prata om språkinlärning.",
+      "Should match cue 2 text"
+    );
+
+    // At 9.5s (<= 1.2s into cue 2)
+    const r2 = computePreviousReplicaSeek(9.5, [], cues);
+    assertEqual(r2.targetTime, 4.8, "Jumps back to cue 1 at 4.8s (5.0 - 0.2s)");
+    assertEqual(
+      r2.replicaLabel,
+      "Hej och välkomna!",
+      "Should match cue 1 text"
     );
   });
 

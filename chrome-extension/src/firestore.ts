@@ -150,17 +150,94 @@ export function firestoreDocToCard(doc: FirestoreDocument): VocabCard {
     const parts = doc.name.split("/");
     card.id = parts[parts.length - 1];
   }
-  return card as VocabCard;
+  return stripCardSavedAudio(card as VocabCard).card;
+}
+
+export function buildFallbackAudioUrl(lemma: string, article = ""): string {
+  const cleanLemma = (lemma || "").trim();
+  if (!cleanLemma) return "";
+  const spokenText = article ? `${article} ${cleanLemma}` : cleanLemma;
+  return `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=sv&client=tw-ob&q=${encodeURIComponent(
+    spokenText
+  )}`;
 }
 
 /**
- * Create a new Vocabulary Card with initial FSRS scheduling state
+ * Strip any base64 audio data from a card and ensure it only stores an audioUrl link.
+ */
+export function stripCardSavedAudio(card: VocabCard): {
+  card: VocabCard;
+  modified: boolean;
+} {
+  const hadBase64Audio = Boolean(card.media?.audioBase64);
+  const existingAudioUrl = (card.media?.audioUrl || "").trim();
+  const resolvedAudioUrl =
+    existingAudioUrl && !existingAudioUrl.startsWith("data:")
+      ? existingAudioUrl
+      : buildFallbackAudioUrl(
+          card.swedish?.lemma || card.swedish?.surfaceForm || "",
+          card.swedish?.article || ""
+        );
+  const needsUrlUpdate = resolvedAudioUrl !== existingAudioUrl;
+
+  if (!hadBase64Audio && !needsUrlUpdate) {
+    return { card, modified: false };
+  }
+
+  return {
+    card: {
+      ...card,
+      media: {
+        ...card.media,
+        imageUrl: card.media?.imageUrl || "",
+        audioUrl: resolvedAudioUrl,
+        audioBase64: "",
+        audioSource: card.media?.audioSource || "Swedish Dictionary"
+      }
+    },
+    modified: true
+  };
+}
+
+/**
+ * Clean up all saved audio base64 blobs from local storage cards.
+ */
+export async function cleanupSavedAudioInStorage(): Promise<number> {
+  const store = await storageGet(LOCAL_CARDS_KEY);
+  const rawCards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
+  if (rawCards.length === 0) return 0;
+
+  let cleanedCount = 0;
+  const cleanedCards = rawCards.map((c) => {
+    const { card, modified } = stripCardSavedAudio(c);
+    if (modified) cleanedCount++;
+    return card;
+  });
+
+  if (cleanedCount > 0) {
+    await storageSet({ [LOCAL_CARDS_KEY]: cleanedCards });
+  }
+  return cleanedCount;
+}
+
+/**
+ * Create a new Vocabulary Card with initial FSRS scheduling state.
+ * Never persists raw audioBase64 blobs — only saves the audioUrl link.
  */
 export function createCardObject(enrichment: EnrichmentPayload): VocabCard {
   const nowIso = new Date().toISOString();
   const id =
     enrichment.id ||
     `sv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const lemma =
+    enrichment.swedish?.lemma || enrichment.swedish?.surfaceForm || "";
+  const article = enrichment.swedish?.article || "";
+  const rawAudioUrl = (enrichment.media?.audioUrl || "").trim();
+  const audioUrl =
+    rawAudioUrl && !rawAudioUrl.startsWith("data:")
+      ? rawAudioUrl
+      : buildFallbackAudioUrl(lemma, article);
 
   return {
     id,
@@ -169,8 +246,8 @@ export function createCardObject(enrichment: EnrichmentPayload): VocabCard {
     sourceTitle: enrichment.sourceTitle || "",
     swedish: {
       surfaceForm: enrichment.swedish?.surfaceForm || "",
-      lemma: enrichment.swedish?.lemma || enrichment.swedish?.surfaceForm || "",
-      article: enrichment.swedish?.article || "", // 'en' | 'ett' | ''
+      lemma,
+      article, // 'en' | 'ett' | ''
       partOfSpeech: enrichment.swedish?.partOfSpeech || "word",
       inflections: enrichment.swedish?.inflections || "",
       definitionSv: enrichment.swedish?.definitionSv || "",
@@ -183,8 +260,8 @@ export function createCardObject(enrichment: EnrichmentPayload): VocabCard {
     },
     media: {
       imageUrl: enrichment.media?.imageUrl || "",
-      audioUrl: enrichment.media?.audioUrl || "",
-      audioBase64: enrichment.media?.audioBase64 || "",
+      audioUrl,
+      audioBase64: "",
       audioSource: enrichment.media?.audioSource || "Swedish Dictionary"
     },
     fsrs: {
@@ -281,7 +358,14 @@ export async function saveCardToStorage(
   const settings = await getSettings();
 
   const store = await storageGet(LOCAL_CARDS_KEY);
-  const cards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
+  const rawCards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
+  let anyCleaned = false;
+  const cards: VocabCard[] = rawCards.map((c) => {
+    const { card: cleaned, modified } = stripCardSavedAudio(c);
+    if (modified) anyCleaned = true;
+    return cleaned;
+  });
+
   const existingIdx = cards.findIndex((c) =>
     isSameSwedishWord(
       c,
@@ -293,6 +377,9 @@ export async function saveCardToStorage(
 
   // Do NOT save a second time if the word already exists in the deck
   if (existingIdx >= 0) {
+    if (anyCleaned) {
+      await storageSet({ [LOCAL_CARDS_KEY]: cards });
+    }
     return {
       card: cards[existingIdx],
       cloudSynced: false,
@@ -332,7 +419,8 @@ export async function pushCardToFirestore(
     projectId
   )}/databases/(default)/documents/cards/${encodeURIComponent(card.id)}${apiKeyParam}`;
 
-  const body = cardToFirestoreDoc(card);
+  const cleanCard = stripCardSavedAudio(card).card;
+  const body = cardToFirestoreDoc(cleanCard);
   const res = await fetch(url, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -373,7 +461,13 @@ export async function fetchCardsFromFirestore(
 export async function getAllCards(): Promise<VocabCard[]> {
   const settings = await getSettings();
   const store = await storageGet(LOCAL_CARDS_KEY);
-  const localCards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
+  const rawLocalCards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
+  let localModified = false;
+  const localCards: VocabCard[] = rawLocalCards.map((c) => {
+    const { card, modified } = stripCardSavedAudio(c);
+    if (modified) localModified = true;
+    return card;
+  });
 
   if (settings.firebaseProjectId && settings.firebaseProjectId.trim()) {
     try {
@@ -390,15 +484,19 @@ export async function getAllCards(): Promise<VocabCard[]> {
       console.warn("Falling back to local cards:", e);
     }
   }
+
+  if (localModified) {
+    await storageSet({ [LOCAL_CARDS_KEY]: localCards });
+  }
   return localCards;
 }
 
 export async function deleteCard(cardId: string): Promise<VocabCard[]> {
   const settings = await getSettings();
   const store = await storageGet(LOCAL_CARDS_KEY);
-  const localCards: VocabCard[] = (store[LOCAL_CARDS_KEY] || []).filter(
-    (c: VocabCard) => c.id !== cardId
-  );
+  const localCards: VocabCard[] = (store[LOCAL_CARDS_KEY] || [])
+    .filter((c: VocabCard) => c.id !== cardId)
+    .map((c: VocabCard) => stripCardSavedAudio(c).card);
   await storageSet({ [LOCAL_CARDS_KEY]: localCards });
 
   if (settings.firebaseProjectId && settings.firebaseProjectId.trim()) {
@@ -420,7 +518,16 @@ export async function syncAllLocalToCloud(): Promise<number> {
     throw new Error("Please configure your Firebase Project ID first.");
   }
   const store = await storageGet(LOCAL_CARDS_KEY);
-  const localCards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
+  const rawCards: VocabCard[] = store[LOCAL_CARDS_KEY] || [];
+  let anyCleaned = false;
+  const localCards = rawCards.map((c) => {
+    const { card, modified } = stripCardSavedAudio(c);
+    if (modified) anyCleaned = true;
+    return card;
+  });
+  if (anyCleaned) {
+    await storageSet({ [LOCAL_CARDS_KEY]: localCards });
+  }
   let syncedCount = 0;
   for (const card of localCards) {
     await pushCardToFirestore(card, settings);

@@ -70,15 +70,18 @@ function playCardAudio(card: VocabCard | EnrichmentPayload): void {
   const src = card?.media?.audioBase64 || card?.media?.audioUrl;
   if (src) {
     const audio = new Audio(src);
-    audio.play().catch(() => {});
-  } else if ("speechSynthesis" in window) {
-    const u = new SpeechSynthesisUtterance(
-      card?.swedish?.article
-        ? `${card.swedish.article} ${card.swedish.lemma}`
-        : card?.swedish?.lemma || ""
-    );
-    u.lang = "sv-SE";
-    window.speechSynthesis.speak(u);
+    audio.play().catch(() => {
+      if (card?.media?.audioUrl && src !== card?.media?.audioBase64) {
+        chrome.runtime.sendMessage(
+          { type: "FETCH_AUDIO", audioUrl: card.media.audioUrl },
+          (res: ExtensionResponse<string>) => {
+            if (res?.ok && res.data) {
+              new Audio(res.data).play().catch(() => {});
+            }
+          }
+        );
+      }
+    });
   }
 }
 

@@ -5,6 +5,7 @@
   "description": "Select any Swedish word on a webpage to get its dictionary lemma (en/ett), English translation, native audio, and 1st Google Image, then save to Firebase Firestore for FSRS spaced repetition on Android.",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "activeTab",
     "contextMenus"
   ],
