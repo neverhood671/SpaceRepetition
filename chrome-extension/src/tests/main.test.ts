@@ -15,10 +15,14 @@ import {
   firestoreDocToCard,
   saveCardToStorage,
   getAllCards,
-  stripCardSavedAudio
+  stripCardSavedAudio,
+  cleanupSavedAudioInStorage,
+  buildFallbackAudioUrl
 } from "../firestore.js";
 import {
-  computePreviousReplicaSeek
+  computePreviousReplicaSeek,
+  updateSubtitleTokenSelection,
+  parseSubtitleLinesFromHtml
 } from "../types.js";
 
 interface MockResponseInit {
@@ -762,6 +766,122 @@ async function runTests(): Promise<void> {
     );
   });
 
+  await test("disambiguates homograph 'pallar' as a verb ('att palla') in 'Det är då man ser om folk pallar.' even when Wiktionary lists Substantiv first", async () => {
+    (globalThis as any).fetch = async (input: string | URL) => {
+      const url = decodeURIComponent(String(input));
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=pallar")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "501": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Substantiv===\n'''pallar'''\n#{{böjning|sv|subst|pall}}\n===Verb===\n'''pallar'''\n#{{böjning|sv|verb|palla}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=palla")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "502": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Verb===\n{{sv-verb-ar}}\n'''palla'''\n#orka med, klara av\n*engelska: {{ö+|en|cope}}, {{ö+|en|manage}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=pall")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "503": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Substantiv===\n{{sv-subst-n-ar}}\n'''pall'''\n#liten stol utan ryggstöd\n*engelska: {{ö+|en|stool}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("translate.googleapis.com")) {
+        return createMockResponse({
+          jsonData: [
+            [["stools", "pallar"]],
+            [
+              ["noun", ["stools", "pallets"], [], "pall"],
+              ["verb", ["cope", "manage"], [], "palla"]
+            ]
+          ]
+        });
+      }
+      return createMockResponse({ jsonData: {} });
+    };
+
+    const verbEnriched = await analyzeSwedishWord({
+      word: "pallar",
+      contextSentence: "Det är då man ser om folk pallar."
+    });
+
+    assertEqual(
+      verbEnriched.swedish.partOfSpeech,
+      "verb",
+      "'pallar' in 'Det är då man ser om folk pallar.' MUST be recognized as a verb"
+    );
+    assertEqual(
+      verbEnriched.swedish.lemma,
+      "att palla",
+      "Lemma MUST be 'att palla' (not 'pall')"
+    );
+    assertEqual(
+      verbEnriched.swedish.article,
+      "",
+      "Verb 'att palla' must NOT have a noun article"
+    );
+    assertEqual(
+      verbEnriched.english.lemmaTranslation,
+      "cope, manage",
+      "Should resolve verb translation ('cope, manage') rather than noun ('stool')"
+    );
+
+    const nounEnriched = await analyzeSwedishWord({
+      word: "pallar",
+      contextSentence: "Vi köpte tre pallar."
+    });
+
+    assertEqual(
+      nounEnriched.swedish.partOfSpeech,
+      "noun",
+      "'pallar' after quantifier 'tre' MUST be recognized as a noun"
+    );
+    assertEqual(
+      nounEnriched.swedish.lemma,
+      "pall",
+      "Noun lemma should be 'pall'"
+    );
+    assertEqual(
+      nounEnriched.swedish.article,
+      "en",
+      "Noun 'pall' should have article 'en'"
+    );
+  });
+
   // ---------------------------------------------------------------------------
   // 5. Cloud Firestore Document Round-Trip & Storage Deduplication
   // ---------------------------------------------------------------------------
@@ -1038,6 +1158,140 @@ async function runTests(): Promise<void> {
       "Hej och välkomna!",
       "Should match cue 1 text"
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // 7. Audio Quota Cleanup, Cmd Multi-Word Deferral & TV4 Play Subtitle Parsing
+  // ---------------------------------------------------------------------------
+  console.log("\n7. Audio Storage Cleanup, Cmd Multi-Word Deferral & TV4 Play Subtitles");
+
+  await test("never persists audioBase64 in saveCardToStorage and cleans up legacy saved audio", async () => {
+    const savedRes = await saveCardToStorage({
+      swedish: {
+        surfaceForm: "böcker",
+        lemma: "bok",
+        article: "en",
+        partOfSpeech: "noun",
+        inflections: "en bok, boken, böcker, böckerna",
+        definitionSv: "tryckt verk",
+        contextSentence: "Jag läser böcker."
+      },
+      english: {
+        lemmaTranslation: "book",
+        contextualTranslation: "books",
+        sentenceTranslation: "I read books."
+      },
+      media: {
+        imageUrl: "https://tse1.mm.bing.net/th?id=OIP.bok",
+        audioUrl: "https://upload.wikimedia.org/wikipedia/commons/Sv-bok.ogg",
+        audioBase64: "data:audio/ogg;base64,VERY_LARGE_BASE64_PAYLOAD_THAT_MUST_BE_STRIPPED",
+        audioSource: "Swedish Wiktionary"
+      }
+    });
+
+    assertEqual(
+      savedRes.card.media.audioBase64,
+      "",
+      "Saved card MUST have empty audioBase64 to prevent kQuotaBytes exceeded"
+    );
+    assertEqual(
+      savedRes.card.media.audioUrl,
+      "https://upload.wikimedia.org/wikipedia/commons/Sv-bok.ogg",
+      "Saved card MUST retain the audioUrl link"
+    );
+
+    const fallbackUrl = buildFallbackAudioUrl("bok", "en");
+    assert(
+      fallbackUrl.includes("translate_tts") && fallbackUrl.includes("en%20bok"),
+      "buildFallbackAudioUrl should construct a valid Swedish TTS URL with article"
+    );
+
+    const cleanedCount = await cleanupSavedAudioInStorage();
+    assertEqual(
+      cleanedCount,
+      0,
+      "Already-clean storage should report 0 cards needing cleanup"
+    );
+  });
+
+  await test("defers translation lookup while Cmd/Ctrl is held during multi-word selection", () => {
+    const sentence = "Om man jobbade där höll man oftast till på den sidan.";
+
+    // 1. User holds Cmd (isMultiSelect = true) and clicks first word "höll"
+    const step1 = updateSubtitleTokenSelection(
+      [],
+      { word: "höll", tokenIndex: 4, sentence },
+      true
+    );
+    assertEqual(step1.deferLookup, true, "Lookup MUST be deferred while Cmd is held on first word");
+    assertEqual(step1.combinedPhrase, "höll", "First token should be 'höll'");
+
+    // 2. Still holding Cmd, user clicks "till" (even out of order or non-adjacent)
+    const step2 = updateSubtitleTokenSelection(
+      step1.tokens,
+      { word: "till", tokenIndex: 7, sentence },
+      true
+    );
+    assertEqual(step2.deferLookup, true, "Lookup MUST remain deferred while Cmd is held on second word");
+    assertEqual(
+      step2.combinedPhrase,
+      "höll till",
+      "Selected tokens should combine in sentence order into 'höll till'"
+    );
+
+    // 3. Clicking an already-selected word while holding Cmd toggles it off
+    const step3 = updateSubtitleTokenSelection(
+      step2.tokens,
+      { word: "till", tokenIndex: 7, sentence },
+      true
+    );
+    assertEqual(step3.combinedPhrase, "höll", "Clicking selected token with Cmd should deselect it");
+
+    // 4. Plain click without Cmd immediately triggers lookup (deferLookup = false)
+    const step4 = updateSubtitleTokenSelection(
+      step2.tokens,
+      { word: "jobbade", tokenIndex: 2, sentence },
+      false
+    );
+    assertEqual(step4.deferLookup, false, "Click without Cmd should trigger lookup immediately");
+    assertEqual(step4.combinedPhrase, "jobbade", "Click without Cmd should reset selection to clicked word");
+  });
+
+  await test("parses subtitle lines from both SVT Play and TV4 Play (#html-subtitles) markup", () => {
+    // SVT Play style: separate leaf <span> elements
+    const svtHtml = `
+      <div data-rt="subtitles-container">
+        <div><span>Vi ses imorgon</span></div>
+        <div><span>klockan åtta.</span></div>
+      </div>
+    `;
+    const svtLines = parseSubtitleLinesFromHtml(svtHtml);
+    assertEqual(svtLines.length, 2, "SVT Play markup should produce 2 lines");
+    assertEqual(svtLines[0], "Vi ses imorgon", "First SVT line should match");
+    assertEqual(svtLines[1], "klockan åtta.", "Second SVT line should match");
+
+    // TV4 Play (#html-subtitles) style with <br> and inline <i> tags inside a span
+    const tv4BrHtml = `
+      <div id="html-subtitles">
+        <span><i>Första raden</i> i programmet<br/>och andra raden här.</span>
+      </div>
+    `;
+    const tv4BrLines = parseSubtitleLinesFromHtml(tv4BrHtml);
+    assertEqual(tv4BrLines.length, 2, "TV4 Play <br> markup should split into 2 lines");
+    assertEqual(tv4BrLines[0], "Första raden i programmet", "First TV4 line should unwrap <i> and trim");
+    assertEqual(tv4BrLines[1], "och andra raden här.", "Second TV4 line after <br> should match");
+
+    // TV4 Play (#html-subtitles) style with <div> / <p> blocks and no spans
+    const tv4DivHtml = `
+      <div id="html-subtitles">
+        <div>Det här är TV4 Play</div>
+        <div>med svenska undertexter.</div>
+      </div>
+    `;
+    const tv4DivLines = parseSubtitleLinesFromHtml(tv4DivHtml);
+    assertEqual(tv4DivLines.length, 2, "TV4 Play block div markup should produce 2 lines");
+    assertEqual(tv4DivLines[0], "Det här är TV4 Play", "First TV4 div line should match");
+    assertEqual(tv4DivLines[1], "med svenska undertexter.", "Second TV4 div line should match");
   });
 
   // ---------------------------------------------------------------------------

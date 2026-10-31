@@ -177,3 +177,101 @@ export function computePreviousReplicaSeek(
     replicaLabel
   };
 }
+
+export interface SubtitleTokenItem {
+  word: string;
+  tokenIndex: number;
+  sentence: string;
+}
+
+/**
+ * Pure state transition for subtitle word clicks (including Cmd/Ctrl multi-word grouping).
+ * When isMultiSelect (Cmd/Ctrl) is true, lookup is deferred (deferLookup: true) until key release.
+ */
+export function updateSubtitleTokenSelection(
+  existingTokens: SubtitleTokenItem[],
+  clicked: SubtitleTokenItem,
+  isMultiSelect: boolean
+): {
+  tokens: SubtitleTokenItem[];
+  combinedPhrase: string;
+  deferLookup: boolean;
+} {
+  let nextTokens: SubtitleTokenItem[];
+
+  if (
+    !isMultiSelect ||
+    (existingTokens.length > 0 &&
+      existingTokens[0].sentence !== clicked.sentence)
+  ) {
+    nextTokens = [{ ...clicked }];
+  } else {
+    nextTokens = [...existingTokens];
+    const existingIdx = nextTokens.findIndex(
+      (t) => t.tokenIndex === clicked.tokenIndex
+    );
+    if (existingIdx >= 0 && nextTokens.length > 1) {
+      nextTokens.splice(existingIdx, 1);
+    } else if (existingIdx === -1) {
+      nextTokens.push({ ...clicked });
+    }
+    nextTokens.sort((a, b) => a.tokenIndex - b.tokenIndex);
+  }
+
+  return {
+    tokens: nextTokens,
+    combinedPhrase: nextTokens.map((t) => t.word).join(" "),
+    deferLookup: isMultiSelect
+  };
+}
+
+/**
+ * Parse subtitle lines from SVT Play ([data-rt="subtitles-container"]) or TV4 Play (#html-subtitles) HTML markup.
+ */
+export function parseSubtitleLinesFromHtml(html: string): string[] {
+  if (!html || !html.trim()) return [];
+
+  // 1. Replace <br> variants with newline
+  let processed = html.replace(/<br\s*\/?>/gi, "\n");
+
+  // 2. Unwrap inline formatting tags (<i>, <em>, <b>, <strong>, <u>)
+  processed = processed.replace(/<\/?(?:i|em|b|strong|u)\b[^>]*>/gi, "");
+
+  // 3. Extract leaf <span> contents (spans that do not contain nested <span, <div, or <p)
+  const spanRegex = /<span\b[^>]*>([\s\S]*?)<\/span>/gi;
+  const leafSpanContents: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = spanRegex.exec(processed)) !== null) {
+    const inner = match[1];
+    if (!/<(?:span|div|p)\b/i.test(inner)) {
+      const stripped = inner.replace(/<[^>]+>/g, "");
+      if (stripped.trim().length > 0) {
+        leafSpanContents.push(stripped);
+      }
+    }
+  }
+
+  const lines: string[] = [];
+  if (leafSpanContents.length > 0) {
+    for (const content of leafSpanContents) {
+      const parts = content
+        .split(/\n+/)
+        .map((l) => l.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      lines.push(...parts);
+    }
+  }
+
+  if (lines.length === 0) {
+    const withBlockBreaks = processed
+      .replace(/<\/(?:div|p)>/gi, "\n")
+      .replace(/<[^>]+>/g, "");
+    for (const part of withBlockBreaks.split(/\n+/)) {
+      const clean = part.replace(/\s+/g, " ").trim();
+      if (clean) lines.push(clean);
+    }
+  }
+
+  return lines;
+}
+

@@ -62,12 +62,268 @@ export function cleanWord(raw: string | undefined): string {
  *    - Native human audio filename (ljud=Sv-xxx.ogg)
  *    - Swedish definition & English translations ({{ö+|en|...}})
  */
+const SWEDISH_SUBJECT_PRONOUNS = new Set([
+  "jag",
+  "du",
+  "han",
+  "hon",
+  "hen",
+  "vi",
+  "ni",
+  "dom",
+  "man",
+  "folk",
+  "någon",
+  "nån",
+  "ingen",
+  "vem",
+  "som"
+]);
+
+const SWEDISH_AUX_AND_MODALS = new Set([
+  "att",
+  "kan",
+  "kunde",
+  "ska",
+  "skall",
+  "skulle",
+  "vill",
+  "ville",
+  "måste",
+  "får",
+  "fick",
+  "bör",
+  "borde",
+  "brukar",
+  "brukade",
+  "orkar",
+  "orkade",
+  "hinner",
+  "hann",
+  "vågar",
+  "vågade",
+  "behöver",
+  "behövde",
+  "kommer",
+  "har",
+  "hade",
+  "blir",
+  "blev"
+]);
+
+const SWEDISH_VERB_ADVERBS = new Set([
+  "inte",
+  "ej",
+  "aldrig",
+  "alltid",
+  "ofta",
+  "oftast",
+  "ibland",
+  "redan",
+  "äntligen",
+  "knappt",
+  "knappast",
+  "gärna",
+  "hellre",
+  "helst"
+]);
+
+const SWEDISH_SUBJUNCTIONS = new Set([
+  "om",
+  "när",
+  "medan",
+  "eftersom",
+  "innan",
+  "fast",
+  "fastän",
+  "hur",
+  "ifall",
+  "sedan",
+  "tills"
+]);
+
+const SWEDISH_OBJECT_OR_V2_PRONOUNS = new Set([
+  "jag",
+  "du",
+  "han",
+  "hon",
+  "hen",
+  "vi",
+  "ni",
+  "de",
+  "dom",
+  "man",
+  "mig",
+  "mej",
+  "dig",
+  "dej",
+  "sig",
+  "sej",
+  "honom",
+  "henne",
+  "oss",
+  "er",
+  "dem"
+]);
+
+const SWEDISH_NOUN_DETERMINERS = new Set([
+  "en",
+  "ett",
+  "denna",
+  "detta",
+  "dessa",
+  "min",
+  "mitt",
+  "mina",
+  "din",
+  "ditt",
+  "dina",
+  "sin",
+  "sitt",
+  "sina",
+  "vår",
+  "vårt",
+  "våra",
+  "er",
+  "ert",
+  "era",
+  "deras",
+  "flera",
+  "några",
+  "inga",
+  "två",
+  "tre",
+  "fyra",
+  "fem",
+  "sex",
+  "sju",
+  "åtta",
+  "nio",
+  "tio"
+]);
+
+const SWEDISH_NOUN_PREPOSITIONS = new Set([
+  "på",
+  "i",
+  "med",
+  "under",
+  "över",
+  "från",
+  "av",
+  "utan",
+  "genom",
+  "bland",
+  "mellan",
+  "bakom",
+  "framför",
+  "bredvid",
+  "inom",
+  "utom",
+  "mot",
+  "hos",
+  "kring"
+]);
+
+/**
+ * Infer whether a Swedish word in a sentence is used as a verb or a noun
+ * based on surrounding Swedish clause structure (pronouns, modals, subjunctions, determiners).
+ */
+export function inferSwedishPosFromContext(
+  word: string,
+  contextSentence = ""
+): "" | "verb" | "noun" {
+  const trimmedWord = (word || "").trim().toLowerCase();
+  if (!trimmedWord) return "";
+  if (/^att\s+/i.test(trimmedWord)) return "verb";
+
+  const sentenceTokens =
+    (contextSentence || "").toLowerCase().match(/[\p{L}\p{N}-]+/gu) || [];
+  if (sentenceTokens.length < 2) return "";
+
+  const targetTokens = trimmedWord.match(/[\p{L}\p{N}-]+/gu) || [];
+  if (targetTokens.length === 0) return "";
+  const firstTarget = targetTokens[0];
+  const lastTarget = targetTokens[targetTokens.length - 1];
+
+  const idx = sentenceTokens.findIndex((t) => t === firstTarget);
+  if (idx === -1) return "";
+  const endIdx = Math.min(
+    sentenceTokens.length - 1,
+    idx + targetTokens.length - 1
+  );
+  const prev1 = idx > 0 ? sentenceTokens[idx - 1] : "";
+  const prev2 = idx > 1 ? sentenceTokens[idx - 2] : "";
+  const next1 =
+    endIdx + 1 < sentenceTokens.length ? sentenceTokens[endIdx + 1] : "";
+
+  if (prev1 && SWEDISH_NOUN_DETERMINERS.has(prev1)) {
+    return "noun";
+  }
+  if (prev1 && SWEDISH_NOUN_PREPOSITIONS.has(prev1) && next1 !== "att") {
+    return "noun";
+  }
+
+  if (prev1 && SWEDISH_AUX_AND_MODALS.has(prev1)) {
+    return "verb";
+  }
+  if (prev1 && SWEDISH_VERB_ADVERBS.has(prev1)) {
+    return "verb";
+  }
+  if (prev1 && SWEDISH_SUBJECT_PRONOUNS.has(prev1)) {
+    return "verb";
+  }
+  if (
+    prev1 === "de" &&
+    (next1 === "" ||
+      SWEDISH_VERB_ADVERBS.has(next1) ||
+      SWEDISH_OBJECT_OR_V2_PRONOUNS.has(next1))
+  ) {
+    return "verb";
+  }
+  if (
+    prev2 &&
+    SWEDISH_SUBJUNCTIONS.has(prev2) &&
+    prev1 &&
+    !SWEDISH_NOUN_DETERMINERS.has(prev1) &&
+    !SWEDISH_NOUN_PREPOSITIONS.has(prev1)
+  ) {
+    return "verb";
+  }
+  if (
+    next1 &&
+    (SWEDISH_OBJECT_OR_V2_PRONOUNS.has(next1) || SWEDISH_VERB_ADVERBS.has(next1)) &&
+    !SWEDISH_NOUN_PREPOSITIONS.has(prev1) &&
+    !SWEDISH_NOUN_DETERMINERS.has(prev1)
+  ) {
+    return "verb";
+  }
+  if (lastTarget !== firstTarget && SWEDISH_ADVERBIAL_PARTICLES.has(lastTarget)) {
+    return "verb";
+  }
+
+  return "";
+}
+
+function normalizeWiktionaryInflectionPos(rawPos: string): string {
+  const p = (rawPos || "").trim().toLowerCase();
+  if (p === "verb" || p === "partikelverb") return "verb";
+  if (p === "subst" || p === "substantiv" || p === "noun") return "noun";
+  if (p === "adj" || p === "adjektiv" || p === "adjective") return "adjective";
+  if (p === "adv" || p === "adverb" || p === "verbpartikel") return "adverb";
+  return p;
+}
+
 export async function querySwedishWiktionary(
-  word: string
+  word: string,
+  contextSentence = "",
+  preferredPos = ""
 ): Promise<WiktionaryParseResult | null> {
   const stripped = word.replace(/^att\s+/i, "").trim();
+  const resolvedPreferredPos =
+    preferredPos || inferSwedishPosFromContext(word, contextSentence);
+
   const candidates = Array.from(
-    new Set([ stripped, stripped.toLowerCase(), word, word.toLowerCase() ])
+    new Set([stripped, stripped.toLowerCase(), word, word.toLowerCase()])
   ).filter(Boolean);
   for (const candidate of candidates) {
     try {
@@ -86,33 +342,54 @@ export async function querySwedishWiktionary(
       const svSection =
         wikitext.split("==Svenska==")[1]?.split(/\n==[^=]/)[0] || wikitext;
 
-      // Check if this entry is an inflection of a base lemma: {{böjning|sv|subst|hund}} or {{böjning|sv|verb|segra}}
-      const inflectionMatch = svSection.match(
-        /\{\{böjning\|sv\|([^|}]+)\|([^|}]+)/i
-      );
-      if (inflectionMatch && inflectionMatch[2]) {
-        const inflectedPos = inflectionMatch[1].trim().toLowerCase();
-        const baseLemma = inflectionMatch[2].trim();
-        if (baseLemma.toLowerCase() !== candidate.toLowerCase()) {
-          const baseResult = await parseWiktionarySwedishEntry(baseLemma);
+      // Collect ALL {{böjning|sv|<pos>|<lemma>}} inflections on the page (e.g. "pallar" has both subst|pall and verb|palla)
+      const inflectionMatches = Array.from(
+        svSection.matchAll(/\{\{böjning\|sv\|([^|}]+)\|([^|}]+)/gi)
+      ).map((m) => ({
+        rawPos: m[1].trim().toLowerCase(),
+        normalizedPos: normalizeWiktionaryInflectionPos(m[1]),
+        baseLemma: m[2].trim()
+      }));
+
+      if (inflectionMatches.length > 0) {
+        // Choose the inflection that matches the sentence context POS if available
+        const chosenInflection =
+          (resolvedPreferredPos
+            ? inflectionMatches.find(
+                (inf) => inf.normalizedPos === resolvedPreferredPos
+              )
+            : null) || inflectionMatches[0];
+
+        if (
+          chosenInflection &&
+          chosenInflection.baseLemma.toLowerCase() !== candidate.toLowerCase()
+        ) {
+          const baseResult = await parseWiktionarySwedishEntry(
+            chosenInflection.baseLemma,
+            chosenInflection.normalizedPos
+          );
           if (baseResult) {
             return {
               ...baseResult,
-              lemma: baseLemma,
+              lemma: chosenInflection.baseLemma,
               partOfSpeech:
-                baseResult.partOfSpeech !== "word"
-                  ? baseResult.partOfSpeech
-                  : inflectedPos === "verb"
+                chosenInflection.normalizedPos === "verb"
                   ? "verb"
-                  : inflectedPos === "subst"
+                  : chosenInflection.normalizedPos === "noun"
                   ? "noun"
-                  : baseResult.partOfSpeech
+                  : baseResult.partOfSpeech !== "word"
+                  ? baseResult.partOfSpeech
+                  : chosenInflection.normalizedPos || baseResult.partOfSpeech
             };
           }
         }
       }
 
-      const parsed = await parseWiktionarySection(candidate, svSection);
+      const parsed = await parseWiktionarySection(
+        candidate,
+        svSection,
+        resolvedPreferredPos
+      );
       if (parsed) return parsed;
     } catch (e) {
       console.warn("Wiktionary lookup error:", e);
@@ -122,7 +399,11 @@ export async function querySwedishWiktionary(
   // Handle multi-word Swedish partikelverb (e.g. "höll till" -> de-inflect "höll" to "hålla" -> query "hålla till")
   const tokens = word.trim().split(/\s+/);
   if (tokens.length >= 2) {
-    const firstWordInfo = await querySwedishWiktionary(tokens[0]);
+    const firstWordInfo = await querySwedishWiktionary(
+      tokens[0],
+      contextSentence,
+      "verb"
+    );
     if (firstWordInfo?.lemma) {
       const reconstructedLemma = [
         firstWordInfo.lemma.toLowerCase(),
@@ -130,7 +411,8 @@ export async function querySwedishWiktionary(
       ].join(" ");
       if (reconstructedLemma !== word.toLowerCase()) {
         const particleEntry = await parseWiktionarySwedishEntry(
-          reconstructedLemma
+          reconstructedLemma,
+          "partikelverb"
         );
         if (particleEntry) {
           return {
@@ -156,7 +438,8 @@ export async function querySwedishWiktionary(
 }
 
 async function parseWiktionarySwedishEntry(
-  lemma: string
+  lemma: string,
+  preferredPos = ""
 ): Promise<WiktionaryParseResult | null> {
   try {
     const url = `https://sv.wiktionary.org/w/api.php?action=query&titles=${encodeURIComponent(
@@ -170,7 +453,7 @@ async function parseWiktionarySwedishEntry(
     const wikitext: string = page.revisions?.[0]?.["*"] || "";
     const svSection =
       wikitext.split("==Svenska==")[1]?.split(/\n==[^=]/)[0] || wikitext;
-    return await parseWiktionarySection(lemma, svSection);
+    return await parseWiktionarySection(lemma, svSection, preferredPos);
   } catch {
     return null;
   }
@@ -264,59 +547,117 @@ export function isAdverbPartOfSpeech(
   return false;
 }
 
-export async function parseWiktionarySection(
-  lemma: string,
-  svSection: string
-): Promise<WiktionaryParseResult> {
-  let partOfSpeech = "word";
+function detectSubsectionPos(lemma: string, subText: string): string {
   if (
     lemma.trim().includes(" ") &&
-    (/===Partikelverb===|\(partikelverb\)/i.test(svSection) ||
-      /partikelverb/i.test(svSection))
+    (/===Partikelverb===|\(partikelverb\)/i.test(subText) ||
+      /partikelverb/i.test(subText))
   ) {
-    partOfSpeech = "partikelverb";
-  } else if (
-    /===Verbpartikel===|\{\{verbpartikel/i.test(svSection) ||
-    /===Adverb===|\{\{adv\|sv\}\}/i.test(svSection)
+    return "partikelverb";
+  }
+  if (
+    /===Verbpartikel===|\{\{verbpartikel/i.test(subText) ||
+    /===Adverb===|\{\{adv\|sv\}\}/i.test(subText)
   ) {
-    partOfSpeech = "adverb";
-  } else if (/===Substantiv===|\{\{subst\|sv\}\}/i.test(svSection)) {
-    partOfSpeech = "noun";
-  } else if (/===Verb===|\{\{verb\|sv\}\}/i.test(svSection)) {
-    partOfSpeech = "verb";
-  } else if (/===Adjektiv===|\{\{adj\|sv\}\}/i.test(svSection)) {
-    partOfSpeech = "adjective";
-  } else if (/===Preposition===|\{\{prep\|sv\}\}/i.test(svSection)) {
-    partOfSpeech = "preposition";
-  } else if (/===Konjunktion===|\{\{konj\|sv\}\}/i.test(svSection)) {
-    partOfSpeech = "conjunction";
-  } else if (/===Pronomen===|\{\{pron\|sv\}\}/i.test(svSection)) {
-    partOfSpeech = "pronoun";
-  } else if (/===Interjektion===|\{\{interj\|sv\}\}/i.test(svSection)) {
-    partOfSpeech = "interjection";
+    return "adverb";
+  }
+  if (/===Verb===|\{\{verb\|sv\}\}/i.test(subText)) {
+    return "verb";
+  }
+  if (/===Substantiv===|\{\{subst\|sv\}\}/i.test(subText)) {
+    return "noun";
+  }
+  if (/===Adjektiv===|\{\{adj\|sv\}\}/i.test(subText)) {
+    return "adjective";
+  }
+  if (/===Preposition===|\{\{prep\|sv\}\}/i.test(subText)) {
+    return "preposition";
+  }
+  if (/===Konjunktion===|\{\{konj\|sv\}\}/i.test(subText)) {
+    return "conjunction";
+  }
+  if (/===Pronomen===|\{\{pron\|sv\}\}/i.test(subText)) {
+    return "pronoun";
+  }
+  if (/===Interjektion===|\{\{interj\|sv\}\}/i.test(subText)) {
+    return "interjection";
+  }
+  return "word";
+}
+
+export async function parseWiktionarySection(
+  lemma: string,
+  svSection: string,
+  preferredPos = ""
+): Promise<WiktionaryParseResult> {
+  // Split into ===POS=== subsections if present so multi-POS pages (e.g. noun + verb)
+  // don't blindly pick Substantiv when Verb is requested or when Substantiv is just an inflection stub.
+  const rawSubsections = svSection
+    .split(/(?====[^=\n]+===)/g)
+    .filter((s) => s.trim().length > 0);
+
+  const parsedSubsections = rawSubsections
+    .map((text) => {
+      const pos = detectSubsectionPos(lemma, text);
+      const defLines = Array.from(text.matchAll(/\n#(?![:*])([^\n]+)/g)).map(
+        (m) => m[1]
+      );
+      const isOnlyInflectionStub =
+        defLines.length > 0 &&
+        defLines.every((l) => /\{\{böjning\|sv\|/i.test(l));
+      return { text, pos, isOnlyInflectionStub };
+    })
+    .filter((s) => s.pos !== "word");
+
+  let activeSection = svSection;
+  let partOfSpeech = detectSubsectionPos(lemma, svSection);
+
+  if (parsedSubsections.length > 0) {
+    const normPref = normalizeWiktionaryInflectionPos(preferredPos);
+    const matchingPreferred = normPref
+      ? parsedSubsections.find(
+          (s) =>
+            !s.isOnlyInflectionStub &&
+            (s.pos === normPref ||
+              (normPref === "verb" && s.pos === "partikelverb"))
+        ) ||
+        parsedSubsections.find(
+          (s) =>
+            s.pos === normPref ||
+            (normPref === "verb" && s.pos === "partikelverb")
+        )
+      : null;
+
+    const nonStubs = parsedSubsections.filter((s) => !s.isOnlyInflectionStub);
+    const chosen =
+      matchingPreferred ||
+      (nonStubs.length > 0 ? nonStubs[0] : parsedSubsections[0]);
+
+    activeSection = chosen.text;
+    partOfSpeech = chosen.pos;
   }
 
   let article = "";
   if (partOfSpeech === "noun") {
     if (
-      /\{\{sv-subst-n/i.test(svSection) ||
-      /text=en\s+/i.test(svSection) ||
-      /\{\{u\}\}/i.test(svSection)
+      /\{\{sv-subst-n/i.test(activeSection) ||
+      /text=en\s+/i.test(activeSection) ||
+      /\{\{u\}\}/i.test(activeSection)
     ) {
       article = "en";
     } else if (
-      /\{\{sv-subst-t/i.test(svSection) ||
-      /text=ett\s+/i.test(svSection) ||
-      /\{\{n\}\}/i.test(svSection)
+      /\{\{sv-subst-t/i.test(activeSection) ||
+      /text=ett\s+/i.test(activeSection) ||
+      /\{\{n\}\}/i.test(activeSection)
     ) {
       article = "ett";
     }
   }
 
   let audioFileName: string | null = null;
-  const audioMatch = svSection.match(
-    /ljud\s*=\s*([^|}\n]+\.(?:ogg|mp3|wav|oga))/i
-  );
+  const audioMatch =
+    activeSection.match(/ljud\s*=\s*([^|}\n]+\.(?:ogg|mp3|wav|oga))/i) ||
+    svSection.match(/ljud\s*=\s*([^|}\n]+\.(?:ogg|mp3|wav|oga))/i);
   if (audioMatch) {
     audioFileName = audioMatch[1].trim();
   }
@@ -329,9 +670,15 @@ export async function parseWiktionarySection(
   }
 
   const englishTranslations: string[] = [];
-  const engLineMatch = svSection.match(/\*engelska:([^\n]+)/i);
-  if (engLineMatch) {
-    const matches = engLineMatch[1].matchAll(/\{\{ö\+?\s*\|en\|([^|}]+)/gi);
+  const engLines = Array.from(
+    activeSection.matchAll(/\*engelska:([^\n]+)/gi)
+  );
+  const effectiveEngLines =
+    engLines.length > 0
+      ? engLines
+      : Array.from(svSection.matchAll(/\*engelska:([^\n]+)/gi));
+  for (const lineMatch of effectiveEngLines) {
+    const matches = lineMatch[1].matchAll(/\{\{ö\+?\s*\|en\|([^|}]+)/gi);
     for (const m of matches) {
       if (m[1] && !englishTranslations.includes(m[1].trim())) {
         englishTranslations.push(m[1].trim());
@@ -340,7 +687,10 @@ export async function parseWiktionarySection(
   }
 
   let definitionSv = "";
-  const defMatch = svSection.match(/\n#(?![:*])([^\n]+)/);
+  const defMatch =
+    activeSection.match(/\n#(?![:*])(?!\s*\{\{böjning)([^\n]+)/i) ||
+    activeSection.match(/\n#(?![:*])([^\n]+)/) ||
+    svSection.match(/\n#(?![:*])([^\n]+)/);
   if (defMatch) {
     definitionSv = defMatch[1]
       .replace(/\{\{[^}]+\}\}/g, "")
@@ -408,7 +758,8 @@ async function querySvenskaSeAudio(lemma: string): Promise<string> {
  */
 async function queryGoogleTranslateDictionary(
   word: string,
-  contextSentence: string
+  contextSentence: string,
+  preferredPos = ""
 ): Promise<GoogleTranslateResult> {
   const result: GoogleTranslateResult = {
     wordTranslation: "",
@@ -432,14 +783,21 @@ async function queryGoogleTranslateDictionary(
         .trim();
 
       if (Array.isArray(data?.[1]) && data[1].length > 0) {
-        const firstDict = data[1][0];
-        result.partOfSpeech = firstDict?.[0] || "";
-        const terms: string[] = (firstDict?.[1] || []).slice(0, 4);
+        const normPref = normalizeWiktionaryInflectionPos(preferredPos);
+        const matchingBucket = normPref
+          ? data[1].find(
+              (b: any) =>
+                normalizeWiktionaryInflectionPos(b?.[0] || "") === normPref
+            )
+          : null;
+        const chosenDict = matchingBucket || data[1][0];
+        result.partOfSpeech = chosenDict?.[0] || "";
+        const terms: string[] = (chosenDict?.[1] || []).slice(0, 4);
         if (terms.length > 0) {
           result.synonyms = terms;
         }
-        if (firstDict?.[3]) {
-          result.detectedLemma = firstDict[3];
+        if (chosenDict?.[3]) {
+          result.detectedLemma = chosenDict[3];
         }
       }
     }
@@ -768,10 +1126,11 @@ export async function analyzeSwedishWord({
   }
 
   const settings = await getSettings();
+  const contextPos = inferSwedishPosFromContext(cleaned, contextSentence);
 
   const [wikiData, gTrans, geminiData] = await Promise.all([
-    querySwedishWiktionary(cleaned),
-    queryGoogleTranslateDictionary(cleaned, contextSentence),
+    querySwedishWiktionary(cleaned, contextSentence, contextPos),
+    queryGoogleTranslateDictionary(cleaned, contextSentence, contextPos),
     queryGeminiFlash(cleaned, contextSentence, settings.geminiApiKey)
   ]);
 
@@ -782,10 +1141,16 @@ export async function analyzeSwedishWord({
     cleaned.toLowerCase();
 
   const bareLemma = rawLemma.replace(/^att\s+/i, "").trim();
+  const targetPos = geminiData?.partOfSpeech || contextPos;
 
   let finalWiki = wikiData;
-  if (!finalWiki && bareLemma.toLowerCase() !== cleaned.toLowerCase()) {
-    finalWiki = await parseWiktionarySwedishEntry(bareLemma);
+  if (
+    (!finalWiki ||
+      finalWiki.lemma.toLowerCase() !== bareLemma.toLowerCase()) &&
+    bareLemma.toLowerCase() !== cleaned.toLowerCase()
+  ) {
+    finalWiki =
+      (await parseWiktionarySwedishEntry(bareLemma, targetPos)) || finalWiki;
   }
 
   let baseGTrans: GoogleTranslateResult | null = null;
@@ -794,14 +1159,21 @@ export async function analyzeSwedishWord({
     !geminiData?.lemmaTranslation &&
     !finalWiki?.englishFromWiktionary
   ) {
-    baseGTrans = await queryGoogleTranslateDictionary(bareLemma, "");
+    baseGTrans = await queryGoogleTranslateDictionary(
+      bareLemma,
+      "",
+      targetPos
+    );
   }
 
   const detectedPartOfSpeech =
+    (geminiData?.partOfSpeech && geminiData.partOfSpeech !== "word"
+      ? geminiData.partOfSpeech
+      : "") ||
     (finalWiki?.partOfSpeech && finalWiki.partOfSpeech !== "word"
       ? finalWiki.partOfSpeech
       : "") ||
-    geminiData?.partOfSpeech ||
+    contextPos ||
     gTrans?.partOfSpeech ||
     finalWiki?.partOfSpeech ||
     (/^att\s+/i.test(cleaned) ? "verb" : "word");

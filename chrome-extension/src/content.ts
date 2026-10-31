@@ -34,6 +34,7 @@ interface SelectedSubtitleToken {
   tokenIndex: number;
   sentence: string;
   el: HTMLElement;
+  rect: BoundingRectLike;
 }
 
 (function () {
@@ -53,6 +54,7 @@ interface SelectedSubtitleToken {
   let subMutationObserver: MutationObserver | null = null;
   let autoPausedVideo: HTMLVideoElement | null = null;
   let isCardOpen = false;
+  let isMultiSelectPending = false;
   let selectedSubtitleTokens: SelectedSubtitleToken[] = [];
 
   let currentSelectionData: SelectionLookupData | null = null;
@@ -562,13 +564,18 @@ interface SelectedSubtitleToken {
       </div>
     `;
 
-    ["mousedown", "mouseup", "click", "dblclick", "pointerdown"].forEach(
-      (evtName) => {
-        subOverlayWrap?.addEventListener(evtName, (e: Event) => {
-          e.stopPropagation();
-        });
-      }
-    );
+    [
+      "mousedown",
+      "mouseup",
+      "click",
+      "dblclick",
+      "pointerdown",
+      "pointerup"
+    ].forEach((evtName) => {
+      subOverlayWrap?.addEventListener(evtName, (e: Event) => {
+        e.stopPropagation();
+      });
+    });
 
     const subBar = subOverlayWrap.querySelector(
       "#sv-sub-bar"
@@ -582,7 +589,11 @@ interface SelectedSubtitleToken {
     });
 
     subBar?.addEventListener("mouseleave", () => {
-      if (!isCardOpen) {
+      if (
+        !isCardOpen &&
+        !isMultiSelectPending &&
+        selectedSubtitleTokens.length === 0
+      ) {
         resumeVideoIfAutoPaused();
       }
     });
@@ -592,7 +603,14 @@ interface SelectedSubtitleToken {
     // 3. Dictionary Lookup Card Popover
     popoverEl = document.createElement("div");
     popoverEl.className = "sv-popover";
-    ["mousedown", "mouseup", "click", "dblclick"].forEach((evtName) => {
+    [
+      "mousedown",
+      "mouseup",
+      "click",
+      "dblclick",
+      "pointerdown",
+      "pointerup"
+    ].forEach((evtName) => {
       popoverEl?.addEventListener(evtName, (e: Event) => e.stopPropagation());
     });
     shadowRoot.appendChild(popoverEl);
@@ -604,10 +622,27 @@ interface SelectedSubtitleToken {
   });
 
   function getVideoElement(): HTMLVideoElement | null {
-    return (
-      document.querySelector<HTMLVideoElement>('video[data-rt="video-player"]') ||
-      document.querySelector<HTMLVideoElement>("video")
+    const svtVideo = document.querySelector<HTMLVideoElement>(
+      'video[data-rt="video-player"]'
     );
+    if (svtVideo) return svtVideo;
+
+    const videos = Array.from(document.querySelectorAll<HTMLVideoElement>("video"));
+    if (videos.length === 0) return null;
+    if (videos.length === 1) return videos[0];
+
+    // Prefer the largest visible video element on the page (e.g. on TV4 Play)
+    let bestVideo = videos[0];
+    let bestArea = 0;
+    for (const v of videos) {
+      const r = v.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (area > bestArea) {
+        bestArea = area;
+        bestVideo = v;
+      }
+    }
+    return bestVideo;
   }
 
   interface SubtitleReplica {
@@ -771,6 +806,36 @@ interface SelectedSubtitleToken {
       t.el?.classList?.remove("selected");
     }
     selectedSubtitleTokens = [];
+    isMultiSelectPending = false;
+  }
+
+  function flushPendingSubtitleLookup(): void {
+    if (!isMultiSelectPending) return;
+    isMultiSelectPending = false;
+    if (selectedSubtitleTokens.length === 0) return;
+
+    const combinedPhrase = selectedSubtitleTokens.map((t) => t.word).join(" ");
+    const fullSentence = selectedSubtitleTokens[0].sentence;
+    const lastToken = selectedSubtitleTokens[selectedSubtitleTokens.length - 1];
+    const liveRect = lastToken.el?.isConnected
+      ? lastToken.el.getBoundingClientRect()
+      : null;
+    const targetRect: BoundingRectLike =
+      liveRect && (liveRect.width > 0 || liveRect.top > 0)
+        ? {
+            top: liveRect.top,
+            bottom: liveRect.bottom,
+            left: liveRect.left,
+            right: liveRect.right,
+            width: liveRect.width
+          }
+        : lastToken.rect;
+
+    openLookupPopover({
+      word: combinedPhrase,
+      contextSentence: fullSentence,
+      rect: targetRect
+    });
   }
 
   function handleSubtitleWordClick(
@@ -785,6 +850,14 @@ interface SelectedSubtitleToken {
     pauseVideoIfPlaying();
 
     const isMultiSelect = e.metaKey || e.ctrlKey;
+    const domRect = wordSpan.getBoundingClientRect();
+    const tokenRect: BoundingRectLike = {
+      top: domRect.top,
+      bottom: domRect.bottom,
+      left: domRect.left,
+      right: domRect.right,
+      width: domRect.width
+    };
 
     if (
       !isMultiSelect ||
@@ -793,7 +866,13 @@ interface SelectedSubtitleToken {
     ) {
       clearSelectedSubtitleTokens();
       selectedSubtitleTokens = [
-        { word, tokenIndex, sentence: fullSentence, el: wordSpan }
+        {
+          word,
+          tokenIndex,
+          sentence: fullSentence,
+          el: wordSpan,
+          rect: tokenRect
+        }
       ];
       wordSpan.classList.add("selected");
     } else {
@@ -808,27 +887,33 @@ interface SelectedSubtitleToken {
           word,
           tokenIndex,
           sentence: fullSentence,
-          el: wordSpan
+          el: wordSpan,
+          rect: tokenRect
         });
         wordSpan.classList.add("selected");
       }
       selectedSubtitleTokens.sort((a, b) => a.tokenIndex - b.tokenIndex);
     }
 
+    // While Cmd (or Ctrl) is held down, only highlight the selected words and
+    // defer showing the translation popover until the modifier key is released.
+    if (isMultiSelect) {
+      isMultiSelectPending = true;
+      if (popoverEl) {
+        popoverEl.style.display = "none";
+      }
+      return;
+    }
+
     const combinedPhrase = selectedSubtitleTokens.map((t) => t.word).join(" ");
-    const rect = wordSpan.getBoundingClientRect();
     openLookupPopover({
       word: combinedPhrase,
       contextSentence: fullSentence,
-      rect: {
-        top: rect.top,
-        bottom: rect.bottom,
-        left: rect.left,
-        right: rect.right,
-        width: rect.width
-      }
+      rect: tokenRect
     });
   }
+
+  let lastRenderedSubtitleKey = "";
 
   function renderTokenizedLine(
     lineText: string,
@@ -849,6 +934,15 @@ interface SelectedSubtitleToken {
         wordSpan.textContent = part;
         wordSpan.title =
           "Click to look up • ⌘+Click (or Ctrl+Click) to combine multiple words (partikelverb)";
+
+        const matchingToken = selectedSubtitleTokens.find(
+          (t) => t.sentence === fullSentence && t.tokenIndex === thisIdx
+        );
+        if (matchingToken) {
+          wordSpan.classList.add("selected");
+          matchingToken.el = wordSpan;
+        }
+
         wordSpan.addEventListener("click", (e: MouseEvent) =>
           handleSubtitleWordClick(e, part, thisIdx, fullSentence, wordSpan)
         );
@@ -860,6 +954,51 @@ interface SelectedSubtitleToken {
     return { lineDiv, nextTokenIndex: tokenCounter };
   }
 
+  function extractSubtitleLines(container: HTMLElement): string[] {
+    const clone = container.cloneNode(true) as HTMLElement;
+
+    // Replace <br> elements with newline characters so multi-line spans/divs split cleanly
+    clone.querySelectorAll("br").forEach((br) => {
+      br.replaceWith(document.createTextNode("\n"));
+    });
+
+    // Unwrap inline formatting tags (<i>, <em>, <b>, <strong>, <u>) so leaf spans remain leaves
+    clone.querySelectorAll("i, em, b, strong, u").forEach((inlineEl) => {
+      inlineEl.replaceWith(document.createTextNode(inlineEl.textContent || ""));
+    });
+
+    const leafSpans = Array.from(clone.querySelectorAll("span")).filter(
+      (s) => s.children.length === 0 && (s.textContent || "").trim().length > 0
+    );
+
+    let lines: string[] = [];
+    if (leafSpans.length > 0) {
+      for (const s of leafSpans) {
+        const parts = (s.textContent || "")
+          .split(/\n+/)
+          .map((l) => l.replace(/\s+/g, " ").trim())
+          .filter(Boolean);
+        lines.push(...parts);
+      }
+    }
+
+    if (lines.length === 0) {
+      clone.querySelectorAll("div, p").forEach((blockEl) => {
+        blockEl.appendChild(document.createTextNode("\n"));
+      });
+      const raw =
+        (clone.textContent || "").trim() || container.innerText?.trim() || "";
+      if (raw) {
+        lines = raw
+          .split(/\n+/)
+          .map((l) => l.replace(/\s+/g, " ").trim())
+          .filter(Boolean);
+      }
+    }
+
+    return lines;
+  }
+
   function syncSvtSubtitles(): void {
     if (!observedSubContainer) return;
     initShadowHost();
@@ -868,36 +1007,31 @@ interface SelectedSubtitleToken {
     observedSubContainer.style.opacity = "0";
     observedSubContainer.style.pointerEvents = "none";
 
-    const leafSpans = Array.from(
-      observedSubContainer.querySelectorAll("span")
-    ).filter(
-      (s) => s.children.length === 0 && (s.textContent || "").trim().length > 0
-    );
-
-    let lines = leafSpans.map((s) =>
-      (s.textContent || "").replace(/\s+/g, " ").trim()
-    );
-    if (lines.length === 0) {
-      const raw = observedSubContainer.innerText?.trim() || "";
-      if (raw) {
-        lines = raw
-          .split(/\n+/)
-          .map((l) => l.trim())
-          .filter(Boolean);
-      }
-    }
+    const lines = extractSubtitleLines(observedSubContainer);
 
     if (lines.length === 0) {
+      lastRenderedSubtitleKey = "";
       subOverlayWrap.style.display = "none";
       updatePlayerOverlayPositions();
       return;
     }
 
+    const subtitleKey = lines.join("\n");
     const fullSentence = lines.join(" ").replace(/\s+/g, " ").trim();
     const video = getVideoElement();
     if (video) {
       recordSubtitleReplica(fullSentence, video.currentTime);
     }
+
+    if (
+      subtitleKey === lastRenderedSubtitleKey &&
+      subLinesEl.children.length > 0
+    ) {
+      subOverlayWrap.style.display = "flex";
+      updatePlayerOverlayPositions();
+      return;
+    }
+    lastRenderedSubtitleKey = subtitleKey;
 
     subLinesEl.innerHTML = "";
     let runningTokenIndex = 0;
@@ -950,6 +1084,9 @@ interface SelectedSubtitleToken {
     }
   }
 
+  const SUBTITLE_CONTAINER_SELECTOR =
+    '[data-rt="subtitles-container"], #html-subtitles';
+
   function setupSvtPlayWatcher(): void {
     const checkContainer = () => {
       const video = getVideoElement();
@@ -961,7 +1098,7 @@ interface SelectedSubtitleToken {
       }
 
       const container = document.querySelector<HTMLElement>(
-        '[data-rt="subtitles-container"]'
+        SUBTITLE_CONTAINER_SELECTOR
       );
       if (container && container !== observedSubContainer) {
         observedSubContainer = container;
@@ -983,7 +1120,7 @@ interface SelectedSubtitleToken {
     };
 
     checkContainer();
-    setInterval(checkContainer, 1000);
+    setInterval(checkContainer, 500);
     window.addEventListener("resize", updatePlayerOverlayPositions);
     window.addEventListener("scroll", updatePlayerOverlayPositions, {
       passive: true
@@ -1050,23 +1187,84 @@ interface SelectedSubtitleToken {
     el.style.top = `${Math.round(Math.max(margin, top))}px`;
   }
 
-  function playPronunciation(media: Partial<CardMediaInfo> | undefined): void {
-    const src = media?.audioBase64 || media?.audioUrl;
-    if (!src) return;
-    const audio = new Audio(src);
-    audio.play().catch(() => {
-      if (media?.audioUrl && src !== media?.audioBase64) {
-        chrome.runtime.sendMessage(
-          { type: "FETCH_AUDIO", audioUrl: media.audioUrl },
-          (res: ExtensionResponse<string>) => {
-            if (res?.ok && res.data) {
-              if (media) media.audioBase64 = res.data;
-              new Audio(res.data).play().catch(() => {});
-            }
-          }
-        );
+  let sharedAudioCtx: AudioContext | null = null;
+
+  async function playDataUrlAudio(dataUrl: string): Promise<boolean> {
+    try {
+      const commaIdx = dataUrl.indexOf(",");
+      if (commaIdx === -1) return false;
+      const b64 = dataUrl.slice(commaIdx + 1);
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
       }
-    });
+
+      const AudioCtx =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        if (!sharedAudioCtx || sharedAudioCtx.state === "closed") {
+          sharedAudioCtx = new AudioCtx();
+        }
+        if (sharedAudioCtx.state === "suspended") {
+          await sharedAudioCtx.resume();
+        }
+        const audioBuffer = await sharedAudioCtx.decodeAudioData(
+          bytes.buffer.slice(0)
+        );
+        const source = sharedAudioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(sharedAudioCtx.destination);
+        source.start(0);
+        return true;
+      }
+    } catch {
+      // Fall through to Blob URL / HTMLAudioElement fallback
+    }
+
+    try {
+      const commaIdx = dataUrl.indexOf(",");
+      if (commaIdx === -1) return false;
+      const mimeMatch = dataUrl.slice(0, commaIdx).match(/data:([^;]+)/);
+      const mime = mimeMatch ? mimeMatch[1] : "audio/mpeg";
+      const b64 = dataUrl.slice(commaIdx + 1);
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mime });
+      const blobUrl = URL.createObjectURL(blob);
+      const audio = new Audio(blobUrl);
+      audio.addEventListener("ended", () => URL.revokeObjectURL(blobUrl), {
+        once: true
+      });
+      await audio.play();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function playPronunciation(media: Partial<CardMediaInfo> | undefined): void {
+    if (!media) return;
+    if (media.audioBase64 && media.audioBase64.startsWith("data:")) {
+      playDataUrlAudio(media.audioBase64);
+      return;
+    }
+    if (media.audioUrl) {
+      chrome.runtime.sendMessage(
+        { type: "FETCH_AUDIO", audioUrl: media.audioUrl },
+        (res: ExtensionResponse<string>) => {
+          if (res?.ok && res.data) {
+            media.audioBase64 = res.data;
+            playDataUrlAudio(res.data);
+          } else if (media.audioUrl) {
+            new Audio(media.audioUrl).play().catch(() => {});
+          }
+        }
+      );
+    }
   }
 
   function openLookupPopover(selData: SelectionLookupData): void {
@@ -1487,6 +1685,21 @@ interface SelectedSubtitleToken {
         e.stopPropagation();
         jumpToPreviousReplica();
       }
+    }
+  });
+
+  window.addEventListener("keyup", (e: KeyboardEvent) => {
+    if (
+      isMultiSelectPending &&
+      (e.key === "Meta" || e.key === "Control" || (!e.metaKey && !e.ctrlKey))
+    ) {
+      flushPendingSubtitleLookup();
+    }
+  });
+
+  window.addEventListener("blur", () => {
+    if (isMultiSelectPending) {
+      flushPendingSubtitleLookup();
     }
   });
 })();
