@@ -12,6 +12,7 @@ export interface SwedishWordInfo {
   partOfSpeech: string;
   inflections: string;
   definitionSv: string;
+  dictionaryUrl?: string;
   contextSentence: string;
 }
 
@@ -274,4 +275,20 @@ export function parseSubtitleLinesFromHtml(html: string): string[] {
 
   return lines;
 }
+
+/**
+ * Build a direct link to the Swedish Wiktionary dictionary entry for a lemma/word.
+ */
+export function buildSwedishDictionaryUrl(
+  lemma: string,
+  surfaceForm = ""
+): string {
+  const bare = (lemma || surfaceForm || "")
+    .trim()
+    .replace(/^att\s+/i, "")
+    .trim();
+  if (!bare) return "";
+  return `https://sv.wiktionary.org/wiki/${encodeURIComponent(bare)}#Svenska`;
+}
+
 

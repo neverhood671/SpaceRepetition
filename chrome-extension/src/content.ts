@@ -294,6 +294,15 @@ interface SelectedSubtitleToken {
         padding: 6px 9px;
         margin-bottom: 8px;
       }
+      .sv-dict-link {
+        color: #005B99;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+        font-weight: 700;
+      }
+      .sv-dict-link:hover {
+        color: #003d66;
+      }
       .sv-context-box {
         background: #f8fafc;
         border-left: 3px solid #005B99;
@@ -1426,7 +1435,14 @@ interface SelectedSubtitleToken {
         }
         ${
           sw.definitionSv
-            ? `<div class="sv-meta-tag"><b>Ordbok:</b> ${escapeHtml(
+            ? `<div class="sv-meta-tag"><a class="sv-dict-link" href="${escapeHtml(
+                sw.dictionaryUrl ||
+                  `https://sv.wiktionary.org/wiki/${encodeURIComponent(
+                    (sw.lemma || sw.surfaceForm || "")
+                      .replace(/^att\s+/i, "")
+                      .trim()
+                  )}#Svenska`
+              )}" target="_blank" rel="noopener noreferrer" title="Öppna i svenska Wiktionary">Ordbok ↗</a>: ${escapeHtml(
                 sw.definitionSv
               )}</div>`
             : ""

@@ -11,7 +11,8 @@ import {
 import {
   AnalyzeWordRequest,
   EnrichmentPayload,
-  ExtensionMessage
+  ExtensionMessage,
+  buildSwedishDictionaryUrl
 } from "./types.js";
 
 export interface WiktionaryParseResult {
@@ -1269,6 +1270,7 @@ export async function analyzeSwedishWord({
       partOfSpeech,
       inflections: geminiData?.inflections || "",
       definitionSv: finalWiki?.definitionSv || "",
+      dictionaryUrl: buildSwedishDictionaryUrl(bareLemma, cleaned),
       contextSentence: contextSentence || cleaned
     },
     english: {

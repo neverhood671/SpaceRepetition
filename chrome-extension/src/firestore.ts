@@ -2,7 +2,8 @@ import {
   ExtensionSettings,
   VocabCard,
   EnrichmentPayload,
-  SaveCardResult
+  SaveCardResult,
+  buildSwedishDictionaryUrl
 } from "./types.js";
 
 /**
@@ -251,6 +252,9 @@ export function createCardObject(enrichment: EnrichmentPayload): VocabCard {
       partOfSpeech: enrichment.swedish?.partOfSpeech || "word",
       inflections: enrichment.swedish?.inflections || "",
       definitionSv: enrichment.swedish?.definitionSv || "",
+      dictionaryUrl:
+        enrichment.swedish?.dictionaryUrl ||
+        buildSwedishDictionaryUrl(lemma, enrichment.swedish?.surfaceForm || ""),
       contextSentence: enrichment.swedish?.contextSentence || ""
     },
     english: {

@@ -859,6 +859,11 @@ async function runTests(): Promise<void> {
       "cope, manage",
       "Should resolve verb translation ('cope, manage') rather than noun ('stool')"
     );
+    assertEqual(
+      verbEnriched.swedish.dictionaryUrl,
+      "https://sv.wiktionary.org/wiki/palla#Svenska",
+      "Should include direct link to Swedish Wiktionary entry for base lemma"
+    );
 
     const nounEnriched = await analyzeSwedishWord({
       word: "pallar",

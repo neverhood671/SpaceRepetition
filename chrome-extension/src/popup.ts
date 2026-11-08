@@ -282,7 +282,14 @@ function runQuickLookup(): void {
           }
           ${
             sw.definitionSv
-              ? `<div style="font-size:11.5px;color:#475569;margin-bottom:8px;"><b>Ordbok:</b> ${escapeHtml(
+              ? `<div style="font-size:11.5px;color:#475569;margin-bottom:8px;"><a href="${escapeHtml(
+                  sw.dictionaryUrl ||
+                    `https://sv.wiktionary.org/wiki/${encodeURIComponent(
+                      (sw.lemma || sw.surfaceForm || "")
+                        .replace(/^att\s+/i, "")
+                        .trim()
+                    )}#Svenska`
+                )}" target="_blank" rel="noopener noreferrer" style="color:#005B99;font-weight:700;text-decoration:underline;">Ordbok ↗</a>: ${escapeHtml(
                   sw.definitionSv
                 )}</div>`
               : ""
