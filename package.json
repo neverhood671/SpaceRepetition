@@ -1,0 +1,10 @@
+{
+  "name": "svenska-spaced",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "npm --prefix chrome-extension test",
+    "prepare": "git config core.hooksPath .husky"
+  }
+}
+

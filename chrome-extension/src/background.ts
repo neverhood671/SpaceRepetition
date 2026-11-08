@@ -81,35 +81,56 @@ const SWEDISH_SUBJECT_PRONOUNS = new Set([
   "som"
 ]);
 
-const SWEDISH_AUX_AND_MODALS = new Set([
+const SWEDISH_INFINITIVE_MODALS = new Set([
   "att",
   "kan",
   "kunde",
+  "kunna",
   "ska",
   "skall",
   "skulle",
+  "skola",
   "vill",
   "ville",
+  "vilja",
   "måste",
-  "får",
-  "fick",
   "bör",
   "borde",
+  "böra",
   "brukar",
   "brukade",
+  "bruka",
   "orkar",
   "orkade",
+  "orka",
   "hinner",
   "hann",
+  "hinna",
   "vågar",
   "vågade",
-  "behöver",
-  "behövde",
-  "kommer",
-  "har",
-  "hade",
+  "våga",
+  "slipper",
+  "slapp",
+  "slippa",
+  "råkar",
+  "råkade",
+  "råka",
+  "törs",
+  "tordes",
+  "lär"
+]);
+
+const SWEDISH_COPULAR_VERBS = new Set([
+  "är",
+  "var",
   "blir",
-  "blev"
+  "blev",
+  "verkar",
+  "verkade",
+  "känns",
+  "kändes",
+  "låter",
+  "lät"
 ]);
 
 const SWEDISH_VERB_ADVERBS = new Set([
@@ -137,23 +158,50 @@ const SWEDISH_SUBJUNCTIONS = new Set([
   "innan",
   "fast",
   "fastän",
-  "hur",
   "ifall",
-  "sedan",
   "tills"
 ]);
 
-const SWEDISH_OBJECT_OR_V2_PRONOUNS = new Set([
-  "jag",
-  "du",
-  "han",
-  "hon",
-  "hen",
-  "vi",
-  "ni",
-  "de",
-  "dom",
-  "man",
+const SWEDISH_PREPOSITIONAL_OM_VERBS = new Set([
+  "handlar",
+  "handlade",
+  "handla",
+  "pratar",
+  "pratade",
+  "prata",
+  "talar",
+  "talade",
+  "tala",
+  "tycker",
+  "tyckte",
+  "tycka",
+  "drömmer",
+  "drömde",
+  "drömma",
+  "påminner",
+  "påminde",
+  "påminna",
+  "bryr",
+  "brydde",
+  "berättar",
+  "berättade",
+  "berätta",
+  "läser",
+  "läste",
+  "läsa",
+  "skriver",
+  "skrev",
+  "skriva",
+  "frågar",
+  "frågade",
+  "fråga",
+  "ber",
+  "bad",
+  "tävlar",
+  "tävlade"
+]);
+
+const SWEDISH_OBLIQUE_PRONOUNS = new Set([
   "mig",
   "mej",
   "dig",
@@ -163,13 +211,13 @@ const SWEDISH_OBJECT_OR_V2_PRONOUNS = new Set([
   "honom",
   "henne",
   "oss",
-  "er",
   "dem"
 ]);
 
 const SWEDISH_NOUN_DETERMINERS = new Set([
   "en",
   "ett",
+  "den",
   "denna",
   "detta",
   "dessa",
@@ -192,6 +240,15 @@ const SWEDISH_NOUN_DETERMINERS = new Set([
   "flera",
   "några",
   "inga",
+  "många",
+  "alla",
+  "varje",
+  "vilken",
+  "vilket",
+  "vilka",
+  "sådan",
+  "sådant",
+  "sådana",
   "två",
   "tre",
   "fyra",
@@ -222,12 +279,105 @@ const SWEDISH_NOUN_PREPOSITIONS = new Set([
   "utom",
   "mot",
   "hos",
-  "kring"
+  "kring",
+  "till",
+  "för",
+  "ur",
+  "åt",
+  "enligt",
+  "trots"
+]);
+
+const SWEDISH_PARTIKELVERB_PARTICLES = new Set([
+  "till",
+  "upp",
+  "ner",
+  "ned",
+  "ut",
+  "in",
+  "om",
+  "av",
+  "på",
+  "med",
+  "bort",
+  "fram",
+  "kvar",
+  "ihop",
+  "isär",
+  "ihjäl",
+  "undan",
+  "iväg",
+  "ifrån",
+  "omkull",
+  "sönder",
+  "fast",
+  "förbi",
+  "igen",
+  "emot",
+  "efter",
+  "under",
+  "över",
+  "utav",
+  "an",
+  "bi",
+  "för",
+  "sig",
+  "mig",
+  "dig",
+  "oss",
+  "er"
+]);
+
+const SWEDISH_IGA_VERBS = new Set([
+  "stiga",
+  "bestiga",
+  "överstiga",
+  "understiga",
+  "uppstiga",
+  "nedstiga",
+  "viga",
+  "inviga",
+  "kriga",
+  "tiga",
+  "förtiga"
 ]);
 
 /**
- * Infer whether a Swedish word in a sentence is used as a verb or a noun
+ * Check if a word has an unmistakable Swedish adjective suffix (e.g. -ig, -igt, -lig, -ligt, -aktig, -mässig, -full, -lös, -bar)
+ */
+export function hasSwedishAdjectiveMorphology(word: string): boolean {
+  const clean = (word || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^att\s+/i, "");
+  if (!clean || clean.includes(" ") || clean.length < 5) return false;
+  if (SWEDISH_IGA_VERBS.has(clean)) return false;
+  return /(?:ig|igt|iga|lig|ligt|liga|aktig|aktigt|aktiga|mässig|mässigt|mässiga|full|fullt|fulla|lös|löst|lösa|bar|bart|bara)$/i.test(
+    clean
+  );
+}
+
+/**
+ * Normalize a neuter singular (-t) Swedish adjective to its dictionary base form (e.g. "jätteknasigt" -> "jätteknasig")
+ */
+export function normalizeSwedishAdjectiveLemma(word: string): string {
+  const clean = (word || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^att\s+/i, "");
+  if (
+    clean.length >= 5 &&
+    /(?:ig|lig|aktig|mässig|sam|full|lös|bar)t$/i.test(clean)
+  ) {
+    return clean.slice(0, -1);
+  }
+  return clean;
+}
+
+/**
+ * Infer whether a Swedish homograph in a sentence is used as a verb or a noun
  * based on surrounding Swedish clause structure (pronouns, modals, subjunctions, determiners).
+ * Note: This is used to disambiguate dictionary entries, never to override unambiguous adjectives/adverbs.
  */
 export function inferSwedishPosFromContext(
   word: string,
@@ -237,14 +387,22 @@ export function inferSwedishPosFromContext(
   if (!trimmedWord) return "";
   if (/^att\s+/i.test(trimmedWord)) return "verb";
 
+  // Words with unmistakable adjective or adverb morphology are never verbs or nouns
+  if (
+    hasSwedishAdjectiveMorphology(trimmedWord) ||
+    isAdverbPartOfSpeech("", trimmedWord)
+  ) {
+    return "";
+  }
+
   const sentenceTokens =
     (contextSentence || "").toLowerCase().match(/[\p{L}\p{N}-]+/gu) || [];
   if (sentenceTokens.length < 2) return "";
 
   const targetTokens = trimmedWord.match(/[\p{L}\p{N}-]+/gu) || [];
   if (targetTokens.length === 0) return "";
-  const firstTarget = targetTokens[0];
-  const lastTarget = targetTokens[targetTokens.length - 1];
+  const firstTarget = targetTokens[0] || "";
+  const lastTarget = targetTokens[targetTokens.length - 1] || "";
 
   const idx = sentenceTokens.findIndex((t) => t === firstTarget);
   if (idx === -1) return "";
@@ -254,6 +412,7 @@ export function inferSwedishPosFromContext(
   );
   const prev1 = idx > 0 ? sentenceTokens[idx - 1] : "";
   const prev2 = idx > 1 ? sentenceTokens[idx - 2] : "";
+  const prev3 = idx > 2 ? sentenceTokens[idx - 3] : "";
   const next1 =
     endIdx + 1 < sentenceTokens.length ? sentenceTokens[endIdx + 1] : "";
 
@@ -264,41 +423,120 @@ export function inferSwedishPosFromContext(
     return "noun";
   }
 
-  if (prev1 && SWEDISH_AUX_AND_MODALS.has(prev1)) {
-    return "verb";
-  }
-  if (prev1 && SWEDISH_VERB_ADVERBS.has(prev1)) {
-    return "verb";
-  }
-  if (prev1 && SWEDISH_SUBJECT_PRONOUNS.has(prev1)) {
-    return "verb";
-  }
+  // Noun phrase with intervening adjective: Det/Prep + Adj + Noun (e.g. "till ett större skav över natten", "tre stora pallar")
   if (
-    prev1 === "de" &&
-    (next1 === "" ||
-      SWEDISH_VERB_ADVERBS.has(next1) ||
-      SWEDISH_OBJECT_OR_V2_PRONOUNS.has(next1))
+    prev2 &&
+    (SWEDISH_NOUN_DETERMINERS.has(prev2) ||
+      SWEDISH_NOUN_PREPOSITIONS.has(prev2)) &&
+    prev1 &&
+    !SWEDISH_COPULAR_VERBS.has(prev1) &&
+    !SWEDISH_INFINITIVE_MODALS.has(prev1) &&
+    !SWEDISH_SUBJUNCTIONS.has(prev1) &&
+    (!/(?:ar|er|r|de|te|s)$/i.test(firstTarget) ||
+      /(?:a|re|st|t)$/i.test(prev1) ||
+      hasSwedishAdjectiveMorphology(prev1) ||
+      (next1 && SWEDISH_NOUN_PREPOSITIONS.has(next1)))
+  ) {
+    return "noun";
+  }
+
+  // After "har"/"hade", a word ending in -ar/-er is a plural noun object (e.g. "Jag har tankar"),
+  // whereas a verb after "har"/"hade" must be a supine ending in -t/-it/-at/-ts (e.g. "Jag har pallat").
+  if (prev1 === "har" || prev1 === "hade") {
+    if (/(?:ar|er)$/i.test(firstTarget)) {
+      return "noun";
+    }
+    if (/(?:at|it|t|ts)$/i.test(firstTarget)) {
+      return "verb";
+    }
+    return "";
+  }
+
+  // Copular verbs ("är", "var", "blir", "blev", "känns", "låter", "verkar") are followed by
+  // predicative adjectives or nouns (e.g. "Det blev jätteknasigt"), never active finite/infinitive verbs.
+  if (
+    (prev1 && SWEDISH_COPULAR_VERBS.has(prev1)) ||
+    (prev2 &&
+      SWEDISH_COPULAR_VERBS.has(prev2) &&
+      prev1 &&
+      SWEDISH_VERB_ADVERBS.has(prev1))
+  ) {
+    return "";
+  }
+
+  const looksLikeInfinitive = /(?:[aåeéioyäö]|as)$/i.test(firstTarget);
+  const looksLikeFiniteOrInfinitiveVerb = /(?:ar|er|r|de|te|s|a)$/i.test(
+    firstTarget
+  );
+  const looksLikeFiniteVerb = /(?:ar|er|r|de|te|s)$/i.test(firstTarget);
+
+  if (
+    looksLikeInfinitive &&
+    ((prev1 && SWEDISH_INFINITIVE_MODALS.has(prev1)) ||
+      (prev2 &&
+        SWEDISH_INFINITIVE_MODALS.has(prev2) &&
+        prev1 &&
+        SWEDISH_VERB_ADVERBS.has(prev1)))
   ) {
     return "verb";
   }
+
   if (
+    (prev2 === "har" || prev2 === "hade") &&
+    prev1 &&
+    SWEDISH_VERB_ADVERBS.has(prev1) &&
+    /(?:at|it|t|ts)$/i.test(firstTarget)
+  ) {
+    return "verb";
+  }
+
+  if (
+    looksLikeFiniteOrInfinitiveVerb &&
+    ((prev1 && SWEDISH_SUBJECT_PRONOUNS.has(prev1)) ||
+      (prev2 &&
+        SWEDISH_SUBJECT_PRONOUNS.has(prev2) &&
+        prev1 &&
+        SWEDISH_VERB_ADVERBS.has(prev1)))
+  ) {
+    return "verb";
+  }
+
+  if (
+    prev1 === "de" &&
+    looksLikeFiniteVerb &&
+    (next1 === "" ||
+      SWEDISH_VERB_ADVERBS.has(next1) ||
+      SWEDISH_OBLIQUE_PRONOUNS.has(next1))
+  ) {
+    return "verb";
+  }
+
+  if (
+    looksLikeFiniteVerb &&
     prev2 &&
     SWEDISH_SUBJUNCTIONS.has(prev2) &&
+    !(prev2 === "om" && prev3 && SWEDISH_PREPOSITIONAL_OM_VERBS.has(prev3)) &&
     prev1 &&
     !SWEDISH_NOUN_DETERMINERS.has(prev1) &&
     !SWEDISH_NOUN_PREPOSITIONS.has(prev1)
   ) {
     return "verb";
   }
+
   if (
+    looksLikeFiniteVerb &&
     next1 &&
-    (SWEDISH_OBJECT_OR_V2_PRONOUNS.has(next1) || SWEDISH_VERB_ADVERBS.has(next1)) &&
+    (SWEDISH_OBLIQUE_PRONOUNS.has(next1) || SWEDISH_VERB_ADVERBS.has(next1)) &&
     !SWEDISH_NOUN_PREPOSITIONS.has(prev1) &&
     !SWEDISH_NOUN_DETERMINERS.has(prev1)
   ) {
     return "verb";
   }
-  if (lastTarget !== firstTarget && SWEDISH_ADVERBIAL_PARTICLES.has(lastTarget)) {
+
+  if (
+    lastTarget !== firstTarget &&
+    SWEDISH_ADVERBIAL_PARTICLES.has(lastTarget)
+  ) {
     return "verb";
   }
 
@@ -314,6 +552,19 @@ function normalizeWiktionaryInflectionPos(rawPos: string): string {
   return p;
 }
 
+const SWEDISH_INTENSIFIER_PREFIXES = [
+  "jätte",
+  "super",
+  "skit",
+  "kanon",
+  "ur",
+  "tok",
+  "svin",
+  "små",
+  "halv",
+  "hel"
+];
+
 export async function querySwedishWiktionary(
   word: string,
   contextSentence = "",
@@ -323,9 +574,17 @@ export async function querySwedishWiktionary(
   const resolvedPreferredPos =
     preferredPos || inferSwedishPosFromContext(word, contextSentence);
 
+  const adjBaseCandidate = normalizeSwedishAdjectiveLemma(stripped);
   const candidates = Array.from(
-    new Set([stripped, stripped.toLowerCase(), word, word.toLowerCase()])
+    new Set([
+      stripped,
+      stripped.toLowerCase(),
+      word,
+      word.toLowerCase(),
+      ...(adjBaseCandidate !== stripped.toLowerCase() ? [adjBaseCandidate] : [])
+    ])
   ).filter(Boolean);
+
   for (const candidate of candidates) {
     try {
       const url = `https://sv.wiktionary.org/w/api.php?action=query&titles=${encodeURIComponent(
@@ -343,23 +602,48 @@ export async function querySwedishWiktionary(
       const svSection =
         wikitext.split("==Svenska==")[1]?.split(/\n==[^=]/)[0] || wikitext;
 
+      // Identify non-stub base lemma sections on this page (e.g. "skav" has a full ===Substantiv=== base entry
+      // plus an imperative ===Verb=== #{{böjning|sv|verb|skava}} stub).
+      const nonStubBasePosList = svSection
+        .split(/(?====[^=\n]+===)/g)
+        .map((sub) => {
+          const pos = detectSubsectionPos(candidate, sub);
+          const defLines = Array.from(sub.matchAll(/\n#(?![:*])([^\n]+)/g)).map(
+            (m) => m[1] || ""
+          );
+          const isStub =
+            defLines.length === 0 ||
+            defLines.every((l) => /\{\{böjning\|sv\|/i.test(l));
+          return isStub ? "word" : pos;
+        })
+        .filter((pos) => pos !== "word");
+
       // Collect ALL {{böjning|sv|<pos>|<lemma>}} inflections on the page (e.g. "pallar" has both subst|pall and verb|palla)
       const inflectionMatches = Array.from(
         svSection.matchAll(/\{\{böjning\|sv\|([^|}]+)\|([^|}]+)/gi)
       ).map((m) => ({
-        rawPos: m[1].trim().toLowerCase(),
-        normalizedPos: normalizeWiktionaryInflectionPos(m[1]),
-        baseLemma: m[2].trim()
+        rawPos: (m[1] || "").trim().toLowerCase(),
+        normalizedPos: normalizeWiktionaryInflectionPos(m[1] || ""),
+        baseLemma: (m[2] || "").trim()
       }));
 
       if (inflectionMatches.length > 0) {
-        // Choose the inflection that matches the sentence context POS if available
-        const chosenInflection =
-          (resolvedPreferredPos
+        const hasMatchingBaseSection = resolvedPreferredPos
+          ? nonStubBasePosList.includes(resolvedPreferredPos)
+          : nonStubBasePosList.length > 0;
+
+        // Only follow a {{böjning}} redirect if:
+        // 1. It explicitly matches resolvedPreferredPos (and there isn't already a base section for that POS), OR
+        // 2. The page has NO non-stub base lemma sections at all (pure inflection page like "pallar" or "segrade").
+        const chosenInflection = resolvedPreferredPos
+          ? !hasMatchingBaseSection
             ? inflectionMatches.find(
                 (inf) => inf.normalizedPos === resolvedPreferredPos
-              )
-            : null) || inflectionMatches[0];
+              ) || (nonStubBasePosList.length === 0 ? inflectionMatches[0] : null)
+            : null
+          : nonStubBasePosList.length === 0
+          ? inflectionMatches[0]
+          : null;
 
         if (
           chosenInflection &&
@@ -397,6 +681,39 @@ export async function querySwedishWiktionary(
     }
   }
 
+  // Handle productive Swedish intensifier prefixes on adjectives/adverbs (e.g. "jätteknasigt" -> "jätte-" + "knasigt" -> "jätteknasig")
+  const lowerStripped = stripped.toLowerCase();
+  if (!lowerStripped.includes(" ")) {
+    for (const prefix of SWEDISH_INTENSIFIER_PREFIXES) {
+      if (
+        lowerStripped.startsWith(prefix) &&
+        lowerStripped.length >= prefix.length + 4
+      ) {
+        const stem = lowerStripped.slice(prefix.length);
+        const stemInfo = await querySwedishWiktionary(
+          stem,
+          contextSentence,
+          resolvedPreferredPos
+        );
+        if (
+          stemInfo &&
+          (stemInfo.partOfSpeech === "adjective" ||
+            stemInfo.partOfSpeech === "adverb")
+        ) {
+          const cleanStemLemma = stemInfo.lemma
+            .replace(/^att\s+/i, "")
+            .toLowerCase();
+          return {
+            ...stemInfo,
+            lemma: `${prefix}${cleanStemLemma}`,
+            article: "",
+            partOfSpeech: stemInfo.partOfSpeech
+          };
+        }
+      }
+    }
+  }
+
   // Handle multi-word Swedish partikelverb (e.g. "höll till" -> de-inflect "höll" to "hålla" -> query "hålla till")
   const tokens = word.trim().split(/\s+/);
   if (tokens.length >= 2) {
@@ -405,10 +722,18 @@ export async function querySwedishWiktionary(
       contextSentence,
       "verb"
     );
-    if (firstWordInfo?.lemma) {
+    const remainingTokensLower = tokens.slice(1).map((t) => t.toLowerCase());
+    const hasParticleTail = remainingTokensLower.every((t) =>
+      SWEDISH_PARTIKELVERB_PARTICLES.has(t)
+    );
+
+    if (
+      firstWordInfo?.lemma &&
+      isVerbPartOfSpeech(firstWordInfo.partOfSpeech, firstWordInfo.lemma)
+    ) {
       const reconstructedLemma = [
-        firstWordInfo.lemma.toLowerCase(),
-        ...tokens.slice(1).map((t) => t.toLowerCase())
+        firstWordInfo.lemma.replace(/^att\s+/i, "").toLowerCase(),
+        ...remainingTokensLower
       ].join(" ");
       if (reconstructedLemma !== word.toLowerCase()) {
         const particleEntry = await parseWiktionarySwedishEntry(
@@ -423,15 +748,17 @@ export async function querySwedishWiktionary(
           };
         }
       }
-      return {
-        lemma: reconstructedLemma,
-        article: "",
-        partOfSpeech: "partikelverb",
-        audioUrl: firstWordInfo.audioUrl || "",
-        audioSource: firstWordInfo.audioSource || "",
-        englishFromWiktionary: "",
-        definitionSv: ""
-      };
+      if (hasParticleTail) {
+        return {
+          lemma: reconstructedLemma,
+          article: "",
+          partOfSpeech: "partikelverb",
+          audioUrl: firstWordInfo.audioUrl || "",
+          audioSource: firstWordInfo.audioSource || "",
+          englishFromWiktionary: "",
+          definitionSv: ""
+        };
+      }
     }
   }
 
@@ -476,7 +803,16 @@ export function isVerbPartOfSpeech(
     normalized.startsWith("adverb") ||
     normalized === "adv" ||
     normalized === "verbpartikel" ||
-    normalized === "partikel"
+    normalized === "partikel" ||
+    normalized === "adjective" ||
+    normalized === "adjektiv" ||
+    normalized === "adj"
+  ) {
+    return false;
+  }
+  if (
+    lemma &&
+    (hasSwedishAdjectiveMorphology(lemma) || isAdverbPartOfSpeech("", lemma))
   ) {
     return false;
   }
@@ -1139,9 +1475,11 @@ export async function analyzeSwedishWord({
     geminiData?.lemma ||
     wikiData?.lemma ||
     gTrans?.detectedLemma ||
-    cleaned.toLowerCase();
+    (hasSwedishAdjectiveMorphology(cleaned)
+      ? normalizeSwedishAdjectiveLemma(cleaned)
+      : cleaned.toLowerCase());
 
-  const bareLemma = rawLemma.replace(/^att\s+/i, "").trim();
+  let bareLemma = rawLemma.replace(/^att\s+/i, "").trim();
   const targetPos = geminiData?.partOfSpeech || contextPos;
 
   let finalWiki = wikiData;
@@ -1167,6 +1505,8 @@ export async function analyzeSwedishWord({
     );
   }
 
+  // Note: contextPos is ONLY used to disambiguate dictionary entries (in Wiktionary / Google Translate),
+  // NEVER as a standalone fallback POS when no dictionary classifies the word as a verb/noun.
   const detectedPartOfSpeech =
     (geminiData?.partOfSpeech && geminiData.partOfSpeech !== "word"
       ? geminiData.partOfSpeech
@@ -1174,21 +1514,40 @@ export async function analyzeSwedishWord({
     (finalWiki?.partOfSpeech && finalWiki.partOfSpeech !== "word"
       ? finalWiki.partOfSpeech
       : "") ||
-    contextPos ||
     gTrans?.partOfSpeech ||
+    baseGTrans?.partOfSpeech ||
     finalWiki?.partOfSpeech ||
+    (hasSwedishAdjectiveMorphology(cleaned) ? "adjective" : "") ||
     (/^att\s+/i.test(cleaned) ? "verb" : "word");
 
   const isAdverb = isAdverbPartOfSpeech(detectedPartOfSpeech, bareLemma);
-  const partOfSpeech = isAdverb ? "adverb" : detectedPartOfSpeech;
+  const isAdjective =
+    !isAdverb &&
+    (detectedPartOfSpeech === "adjective" ||
+      detectedPartOfSpeech === "adjektiv" ||
+      hasSwedishAdjectiveMorphology(bareLemma));
+
+  if (isAdjective && hasSwedishAdjectiveMorphology(bareLemma)) {
+    bareLemma = normalizeSwedishAdjectiveLemma(bareLemma);
+  }
+
+  const partOfSpeech = isAdverb
+    ? "adverb"
+    : isAdjective
+    ? "adjective"
+    : detectedPartOfSpeech;
 
   const isVerb =
     !isAdverb &&
+    !isAdjective &&
     (isVerbPartOfSpeech(partOfSpeech, bareLemma) ||
       /^att\s+/i.test(cleaned) ||
       /^att\s+/i.test(rawLemma));
 
-  const article = isVerb || isAdverb ? "" : geminiData?.article || finalWiki?.article || "";
+  const article =
+    isVerb || isAdverb || isAdjective
+      ? ""
+      : geminiData?.article || finalWiki?.article || "";
   const formattedLemma = isVerb ? `att ${bareLemma}` : bareLemma;
 
   const lemmaTranslation =

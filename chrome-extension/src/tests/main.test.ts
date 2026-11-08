@@ -7,7 +7,10 @@ import {
   fetchImageAsBase64,
   analyzeSwedishWord,
   isVerbPartOfSpeech,
-  isAdverbPartOfSpeech
+  isAdverbPartOfSpeech,
+  inferSwedishPosFromContext,
+  hasSwedishAdjectiveMorphology,
+  normalizeSwedishAdjectiveLemma
 } from "../background.js";
 import {
   createCardObject,
@@ -884,6 +887,286 @@ async function runTests(): Promise<void> {
       nounEnriched.swedish.article,
       "en",
       "Noun 'pall' should have article 'en'"
+    );
+  });
+
+  await test("recognizes 'jätteknasigt' in 'Det blev jätteknasigt' as an adjective ('jätteknasig') and NEVER adds 'att '", async () => {
+    // 1. Test when Wiktionary has base stem 'knasigt' -> 'knasig' (adjective), but no entry for compound 'jätteknasigt'
+    (globalThis as any).fetch = async (input: string | URL) => {
+      const url = decodeURIComponent(String(input));
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=jätteknasig")) {
+        return createMockResponse({
+          jsonData: { query: { pages: { "-1": { missing: "" } } } }
+        });
+      }
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=knasigt")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "601": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Adjektiv===\n'''knasigt'''\n#{{böjning|sv|adj|knasig}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=knasig")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "602": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Adjektiv===\n'''knasig'''\n#lite tokig eller konstig\n*engelska: {{ö+|en|crazy}}, {{ö+|en|weird}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("translate.googleapis.com")) {
+        return createMockResponse({
+          jsonData: [[["really weird", "jätteknasigt"]]]
+        });
+      }
+      return createMockResponse({ jsonData: {} });
+    };
+
+    const enrichedWithWikiStem = await analyzeSwedishWord({
+      word: "jätteknasigt",
+      contextSentence: "Det blev jätteknasigt."
+    });
+
+    assertEqual(
+      enrichedWithWikiStem.swedish.partOfSpeech,
+      "adjective",
+      "'jätteknasigt' after copular 'blev' MUST be recognized as an adjective, never a verb"
+    );
+    assertEqual(
+      enrichedWithWikiStem.swedish.lemma,
+      "jätteknasig",
+      "Lemma MUST be 'jätteknasig' without 'att ' and without neuter '-t'"
+    );
+    assert(
+      !enrichedWithWikiStem.swedish.lemma.startsWith("att "),
+      "Adjective lemma MUST NEVER start with 'att '"
+    );
+    assertEqual(
+      enrichedWithWikiStem.swedish.article,
+      "",
+      "Adjective must have empty article"
+    );
+
+    // 2. Test when Wiktionary has NO entry at all (e.g., unknown compound adjective 'megaknasigt' in 'Det blev megaknasigt')
+    (globalThis as any).fetch = async (input: string | URL) => {
+      const url = decodeURIComponent(String(input));
+      if (url.includes("sv.wiktionary.org")) {
+        return createMockResponse({
+          jsonData: { query: { pages: { "-1": { missing: "" } } } }
+        });
+      }
+      if (url.includes("translate.googleapis.com")) {
+        return createMockResponse({
+          jsonData: [[["super weird", "megaknasigt"]]]
+        });
+      }
+      return createMockResponse({ jsonData: {} });
+    };
+
+    const enrichedWithoutWiki = await analyzeSwedishWord({
+      word: "megaknasigt",
+      contextSentence: "Det blev megaknasigt."
+    });
+
+    assertEqual(
+      enrichedWithoutWiki.swedish.partOfSpeech,
+      "adjective",
+      "'megaknasigt' must still be classified as 'adjective' even without Wiktionary"
+    );
+    assertEqual(
+      enrichedWithoutWiki.swedish.lemma,
+      "megaknasig",
+      "Neuter '-igt' adjective should normalize to '-ig' without 'att '"
+    );
+  });
+
+  await test("syntax & POS context analysis (inferSwedishPosFromContext) avoids false verb positives across Swedish clause structures", () => {
+    // 1. Copular verbs ('är', 'var', 'blir', 'blev', 'känns', 'låter', 'verkar') never force a following word to be a verb
+    assertEqual(
+      inferSwedishPosFromContext("jätteknasigt", "Det blev jätteknasigt."),
+      "",
+      "Word after copular 'blev' must not be inferred as a verb"
+    );
+    assertEqual(
+      inferSwedishPosFromContext("konstigt", "Det är inte konstigt."),
+      "",
+      "Word after copular 'är inte' must not be inferred as a verb"
+    );
+    assertEqual(
+      inferSwedishPosFromContext("pallar", "Det är pallar."),
+      "",
+      "Noun after copular 'är' ('Those are stools') must not be inferred as a verb"
+    );
+
+    // 2. Main-clause sentence adverbs ('ofta', 'alltid', 'inte', 'redan') before object nouns must not infer 'verb'
+    assertEqual(
+      inferSwedishPosFromContext("kaffe", "Hon dricker ofta kaffe."),
+      "",
+      "Object noun 'kaffe' after 'ofta' must not be inferred as a verb"
+    );
+    assertEqual(
+      inferSwedishPosFromContext("tid", "Jag har inte tid."),
+      "",
+      "Object noun 'tid' after 'inte' must not be inferred as a verb"
+    );
+
+    // 3. 'har' / 'hade' + plural noun (-ar/-er) vs supine verb (-at/-it/-t)
+    assertEqual(
+      inferSwedishPosFromContext("tankar", "Jag har tankar om det."),
+      "noun",
+      "'-ar' word after 'har' ('Jag har tankar') must be inferred as a plural noun, never a verb"
+    );
+    assertEqual(
+      inferSwedishPosFromContext("pallat", "Jag har inte pallat det."),
+      "verb",
+      "Supine '-at' after 'har inte' ('Jag har inte pallat') should be inferred as a verb"
+    );
+
+    // 4. Prepositional 'om' ('handlar om stora tankar') vs subjunction 'om' ('ser om folk pallar')
+    assertEqual(
+      inferSwedishPosFromContext("tankar", "Det handlar om stora tankar."),
+      "",
+      "'tankar' in 'handlar om stora tankar' (prepositional 'om') must NOT be inferred as a verb"
+    );
+    assertEqual(
+      inferSwedishPosFromContext("pallar", "Det är då man ser om folk pallar."),
+      "verb",
+      "'pallar' in 'ser om folk pallar' (subjunction 'om' + subject 'folk') MUST be inferred as a verb"
+    );
+
+    // 5. Relative clause after a noun ('Boken jag läste var bra') must not treat the head noun as a verb
+    assertEqual(
+      inferSwedishPosFromContext("Boken", "Boken jag läste var bra."),
+      "",
+      "Head noun 'Boken' before relative clause subject 'jag' must NOT be inferred as a verb"
+    );
+
+    // 6. Modals + infinitives and determiners/prepositions + nouns
+    assertEqual(
+      inferSwedishPosFromContext("palla", "Man måste kunna palla trycket."),
+      "verb",
+      "Infinitive after modal 'kunna' should be inferred as a verb"
+    );
+    assertEqual(
+      inferSwedishPosFromContext("pallar", "Vi köpte tre pallar."),
+      "noun",
+      "Word after numeral 'tre' should be inferred as a noun"
+    );
+    assertEqual(
+      inferSwedishPosFromContext("pallar", "Lådorna står på pallar."),
+      "noun",
+      "Word after preposition 'på' should be inferred as a noun"
+    );
+
+    // 7. Adjective morphology helpers
+    assertEqual(hasSwedishAdjectiveMorphology("jätteknasigt"), true, "'jätteknasigt' has adjective morphology");
+    assertEqual(hasSwedishAdjectiveMorphology("otroligt"), true, "'otroligt' has adjective morphology");
+    assertEqual(hasSwedishAdjectiveMorphology("stiga"), false, "Verb 'stiga' must be excluded from -iga adjective check");
+    assertEqual(normalizeSwedishAdjectiveLemma("jätteknasigt"), "jätteknasig", "Should strip neuter -t from 'jätteknasigt'");
+    assertEqual(isVerbPartOfSpeech("verb", "jätteknasigt"), false, "isVerbPartOfSpeech must reject words with adjective morphology");
+  });
+
+  await test("recognizes 'skav' in '–och blev till ett större skav över natten–' as a noun ('ett skav') and NEVER as a verb ('att skava')", async () => {
+    (globalThis as any).fetch = async (input: string | URL) => {
+      const url = decodeURIComponent(String(input));
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=skav")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "701": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Substantiv===\n{{sv-subst-t-0}}\n'''skav'''\n#det att något [[skava|skaver]]; [[skavsår]]\n*engelska: {{ö+|en|chafing}}, {{ö+|en|abrasion}}\n===Verb===\n'''skav'''\n#{{böjning|sv|verb|skava}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("sv.wiktionary.org") && url.includes("titles=skava")) {
+        return createMockResponse({
+          jsonData: {
+            query: {
+              pages: {
+                "702": {
+                  revisions: [
+                    {
+                      "*": "==Svenska==\n===Verb===\n'''skava'''\n#gnida, nöta\n*engelska: {{ö+|en|chafe}}, {{ö+|en|rub}}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        });
+      }
+      if (url.includes("translate.googleapis.com")) {
+        return createMockResponse({
+          jsonData: [
+            [["chafing", "skav"]],
+            [
+              ["verb", ["chafe", "scrape", "rub"], [], "skav"],
+              ["noun", ["chafing", "abrasion"], [], "skav"]
+            ]
+          ]
+        });
+      }
+      return createMockResponse({ jsonData: {} });
+    };
+
+    const contextSentence = "–och blev till ett större skav över natten–";
+    assertEqual(
+      inferSwedishPosFromContext("skav", contextSentence),
+      "noun",
+      "'skav' in 'ett större skav över natten' (Det + Adj + Noun) MUST be inferred as a noun"
+    );
+
+    const enriched = await analyzeSwedishWord({
+      word: "skav",
+      contextSentence
+    });
+
+    assertEqual(
+      enriched.swedish.partOfSpeech,
+      "noun",
+      "'skav' in '–och blev till ett större skav över natten–' MUST be recognized as a noun, never a verb"
+    );
+    assertEqual(
+      enriched.swedish.lemma,
+      "skav",
+      "Lemma MUST be 'skav' (not 'att skava' or 'att skav')"
+    );
+    assertEqual(
+      enriched.swedish.article,
+      "ett",
+      "Noun 'skav' should have neuter article 'ett'"
+    );
+    assertEqual(
+      enriched.english.lemmaTranslation,
+      "chafing, abrasion",
+      "Should extract noun translation ('chafing, abrasion') rather than verb ('chafe, rub')"
     );
   });
 

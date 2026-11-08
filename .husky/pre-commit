@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+set -e
+
+echo "🐕 Running pre-commit test suite..."
+npm --prefix chrome-extension test
+
